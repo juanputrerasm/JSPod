@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>JSPod - TRI POD Archive Viewer</title>
+  <meta name="description" content="JSPod is a browser-based POD archive viewer for Terminal Reality game files. Supports POD1, POD2, and EPD formats with RAW image, BIN model, text, and audio preview.">
+  <meta name="keywords" content="POD viewer, Terminal Reality, MTM2, Monster Truck Madness, Hellbender, Terminal Velocity, Fury3, Nocturne, BIN viewer, RAW image">
+  <meta name="author" content="Juan Pablo Utreras">
+  <link rel="stylesheet" href="./styles.css">
+  <script type="importmap">
+    {
+      "imports": {
+        "three":          "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+        "three/addons/":  "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div class="app-shell">
+
+    <!-- ── TOP BAR ─────────────────────────────────────────────────────────── -->
+    <header class="topbar">
+      <div class="brand">
+        <h1>JSPod</h1>
+        <p>Online TRI POD Viewer</p>
+      </div>
+      <div class="load-controls">
+        <input id="file-input" type="file" accept=".pod,.zip" hidden>
+        <button id="open-file-btn" type="button">Open POD / ZIP</button>
+        <div class="url-group">
+          <input id="url-input" type="url" placeholder="https://example.com/game.pod  or  ?url=…" spellcheck="false">
+          <button id="open-url-btn" type="button">Open from URL</button>
+        </div>
+        <button id="clear-btn" type="button" class="quiet">Clear temp</button>
+      </div>
+      <div class="status-strip">
+        <span id="status-bar">Ready.</span>
+      </div>
+    </header>
+
+    <!-- ── ARCHIVE INFO BAR ────────────────────────────────────────────────── -->
+    <div id="archive-info" class="archive-info-bar">No archive loaded.</div>
+
+    <!-- ── FILTER / TOOLBAR ────────────────────────────────────────────────── -->
+    <div class="filter-bar">
+      <span class="search-icon">🔍</span>
+      <input id="search-input" type="search" placeholder="Filter files…" spellcheck="false">
+      <button id="expand-all-btn"   type="button" class="quiet">Expand all</button>
+      <button id="collapse-all-btn" type="button" class="quiet">Collapse all</button>
+      <button id="download-all-btn" type="button" class="quiet" disabled>⬇ Download all as ZIP</button>
+    </div>
+
+    <!-- ── MAIN TWO-COLUMN LAYOUT ───────────────────────────────────────── -->
+    <main class="main-layout" id="main-layout">
+
+      <!-- File tree (left) -->
+      <div class="tree-panel">
+        <div id="file-tree" class="file-tree-scroll"></div>
+      </div>
+
+      <!-- Preview pane (right) -->
+      <div class="preview-panel">
+        <div id="preview-meta" class="preview-meta"></div>
+        <div id="preview-content" class="preview-content">
+          <p class="preview-placeholder">Select a file to preview it here.</p>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- ── LOADING OVERLAY ─────────────────────────────────────────────────── -->
+    <div id="loading-overlay" class="loading-overlay" hidden>
+      <div class="spinner"></div>
+      <span id="loading-msg">Loading…</span>
+    </div>
+
+    <!-- ── MODAL (shared dialog) ───────────────────────────────────────────── -->
+    <dialog id="main-dialog" class="main-dialog"></dialog>
+
+  </div>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

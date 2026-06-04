@@ -129,8 +129,8 @@ export class PodApp {
       const result = await extractFirstPodFromZipBytes(bytes, sourceName);
       podBytes = result.podBytes;
       podName  = result.podEntryName;
-    } else if (!upperName.endsWith(".POD")) {
-      throw new Error("Only .pod and .zip (containing .pod) files are supported.");
+    } else if (!upperName.endsWith(".POD") && !upperName.endsWith(".EPD")) {
+      throw new Error("Only .pod, .epd, and .zip (containing .pod) files are supported.");
     }
     this.loadingMsg.textContent = "Storing to OPFS…";
     await resetSessionFolder(SESSION_ID);
@@ -158,7 +158,7 @@ export class PodApp {
 
   // ─── Rendering ───────────────────────────────────────────────────────────────
   renderIdleState() {
-    this.archiveInfoBar.textContent = "No archive loaded. Open a POD or ZIP file.";
+    this.archiveInfoBar.textContent = "No archive loaded. Open a POD, EPD, or ZIP file.";
     this.treeContainer.innerHTML  = "";
     this.previewContent.innerHTML = '<p class="preview-placeholder">Select a file to preview it here.</p>';
     this.previewMeta.innerHTML    = "";

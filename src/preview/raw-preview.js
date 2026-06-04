@@ -1,24 +1,14 @@
 import { showModal } from "../ui/modal.js";
 import { detectDimensions, suggestDimensions } from "../worker/texture-decoder.js";
 import { normalizeArchiveName, basenameWithoutExtension } from "../shared/path-utils.js";
+import { PALETTES } from "../shared/bundled-palettes.js";
 
-let _bundledPalette = null;
-let _bundledPaletteFetch = null;
-
-async function getBundledPalette() {
-  if (_bundledPalette) return _bundledPalette;
-  if (!_bundledPaletteFetch) {
-    _bundledPaletteFetch = fetch("./assets/palettes/metalcr2.act")
-      .then((r) => r.arrayBuffer())
-      .then((buf) => { _bundledPalette = new Uint8Array(buf); return _bundledPalette; })
-      .catch(() => null);
-  }
-  return _bundledPaletteFetch;
-}
+let _savedPaletteIndex = 0;
 
 export async function render(container, bytes, { entry, podIndex, workerClient, opfsPodPath }) {
   const autoDims      = detectDimensions(bytes.length);
   const paletteOptions = buildPaletteOptions(entry, podIndex);
+  const initIndex      = Math.min(_savedPaletteIndex, paletteOptions.length - 1);
 
   let dims = autoDims;
 
@@ -44,6 +34,7 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     opt.textContent = paletteOptions[i].label;
     palSelect.appendChild(opt);
   }
+  palSelect.value = String(initIndex);
   palLabel.appendChild(palSelect);
 
   const dlBtn = document.createElement("button");
@@ -67,7 +58,10 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     currentCanvas  = drawRaw(canvasWrap, bytes, dims[0], dims[1], currentPalette);
   }
 
-  palSelect.addEventListener("change", () => repaint(parseInt(palSelect.value, 10)));
+  palSelect.addEventListener("change", () => {
+    _savedPaletteIndex = parseInt(palSelect.value, 10);
+    repaint(_savedPaletteIndex);
+  });
 
   dlBtn.addEventListener("click", () => {
     if (!currentCanvas) return;
@@ -76,7 +70,7 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     triggerDownload(bmpBytes, `${base}.bmp`);
   });
 
-  await repaint(0);
+  await repaint(initIndex);
 }
 
 // ─── Dimension picker modal (non-standard sizes) ──────────────────────────────
@@ -132,25 +126,20 @@ async function showDimensionPickerModal(byteCount, paletteOptions) {
 
 // ─── Palette resolution chain ─────────────────────────────────────────────────
 function buildPaletteOptions(entry, podIndex) {
-  const options  = [];
-  const baseName = basenameWithoutExtension(entry.title);
+  const options   = [];
+  const baseName  = basenameWithoutExtension(entry.title);
   const dirPrefix = normalizeArchiveName(entry.name).replace(/\/[^/]+$/, "");
 
-  const sameAct = podIndex.entries.find(
-    (e) => e.title.toUpperCase() === `${baseName}.ACT`
-  );
-  if (sameAct) options.push({ label: `${sameAct.title} (same name)`, entry: sameAct }); // Same name ACT, this should be the one... should!
+  const sameAct = podIndex.entries.find((e) => e.title.toUpperCase() === `${baseName}.ACT`);
+  if (sameAct) options.push({ label: `${sameAct.title} (same name)`, entry: sameAct });
 
-  const metal = podIndex.entries.find((e) => e.title.toUpperCase() === "METALCR2.ACT"); // Fallback: MTM1 default palette first
-  if (metal) options.push({ label: "METALCR2.ACT", entry: metal });
+  options.push({ label: "METALCR2 (MTM1)",  bytes: PALETTES.metalcr2Mtm1 });
+  options.push({ label: "METALCR2 (CPR)",   bytes: PALETTES.metalcr2Cpr });
+  options.push({ label: "VGA (Hellbender)", bytes: PALETTES.vgaHB });
+  options.push({ label: "VGA (TV/F3)",      bytes: PALETTES.vgaTV });
+  options.push({ label: "Greyscale",        greyscale: true });
 
-  const vga = podIndex.entries.find((e) => e.title.toUpperCase() === "VGA.ACT"); //TV-F3 default palette second (if present)
-  if (vga) options.push({ label: "VGA.ACT", entry: vga });
-
-  options.push({ label: "Bundled METALCR2.ACT", entry: null, bundled: true }); // Bundled MTM1 default palette third
-  options.push({ label: "Greyscale", entry: null, greyscale: true }); // Greyscale fallback fourth
-
-  for (const e of podIndex.entries) { // Other ACTs in the same folder fifth
+  for (const e of podIndex.entries) {
     if (!e.title.toUpperCase().endsWith(".ACT")) continue;
     const eDir = e.normalizedName.replace(/\/[^/]+$/, "");
     if (eDir === dirPrefix && e !== sameAct) {
@@ -164,16 +153,12 @@ function buildPaletteOptions(entry, podIndex) {
 async function resolvePalette(option, defaultOptions, workerClient, opfsPodPath) {
   const opt = option ?? defaultOptions[0];
   if (!opt || opt.greyscale) return makeGreyscalePalette();
-  if (opt.bundled || !opt.entry) {
-    const b = await getBundledPalette();
-    return b ? normalizeAct(b) : makeGreyscalePalette();
-  }
+  if (opt.bytes) return normalizeAct(opt.bytes);
   try {
     const { bytes } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: opt.entry });
     return normalizeAct(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
   } catch {
-    const b = await getBundledPalette();
-    return b ? normalizeAct(b) : makeGreyscalePalette();
+    return normalizeAct(PALETTES.metalcr2Mtm1);
   }
 }
 

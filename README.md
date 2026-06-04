@@ -11,7 +11,7 @@ All decoding runs client-side. No server, no uploads, no install.
 - **Open POD and ZIP files** from disk or via URL (including `?url=` query parameter)
 - **Collapsible folder tree** with per-type file icons
 - **Format descriptions** for 40+ Terminal Reality file extensions
-- **Previews** for the most common file types (see below)
+- **Previews** for the most common file types (see below). Advanced BIN (models) and RAW (textures) preview.
 - **Download** individual files or the entire archive as a ZIP
 - **Live search** to filter the file tree
 
@@ -21,7 +21,7 @@ All decoding runs client-side. No server, no uploads, no install.
 
 | Format | Games | Access |
 |--------|-------|--------|
-| **POD1** | MTM1, MTM2, CART Racing, Terminal Velocity, Fury3, Hellbender | Read |
+| **POD1** | MTM1, MTM2, CART Precision Racing, Terminal Velocity, Fury3, Hellbender | Read |
 | **POD2** | Nocturne, 4×4 EVO 1 & 2 | Read |
 | **EPD** | Fly!, Fly2K | Read |
 
@@ -33,9 +33,9 @@ ZIP files containing a `.POD` are supported — the archive is extracted automat
 
 | Extension | Preview |
 |-----------|---------|
-| `.RAW` `.CLR` | Palette-indexed image. Palette resolved from same-name `.ACT` → `METALCR2.ACT` → `VGA.ACT` → bundled fallback. Palette selector and **Save as BMP** included. |
+| `.RAW` | Palette-indexed image. Palette resolved from same-name `.ACT` → bundled fallbacks. Palette selector and **Save as BMP** included. |
 | `.ACT` | 16×16 colour swatch grid with index and hex on hover. |
-| `.BIN` `.LWO` | Interactive 3D model viewer (Three.js, OrbitControls). Shows model stats, texture thumbnails, and a ground grid. Clicking a texture thumbnail opens its RAW preview. |
+| `.BIN` `.LWO` | Interactive 3D model viewer (Three.js, OrbitControls). Shows model stats, texture thumbnails, palette selector and a ground grid. Clicking a texture thumbnail opens its RAW preview. |
 | `.WAV` | In-browser audio playback via `<audio>`. |
 | `.BMP` `.PNG` `.JPG` `.GIF` `.WEBP` | Standard image preview. |
 | `.SIT` `.TRK` `.LVL` `.DEF` `.INI` `.TXT` and more | Monospace text viewer (ISO-8859-1). |
@@ -44,12 +44,13 @@ ZIP files containing a `.POD` are supported — the archive is extracted automat
 ---
 
 ## BIN Model Viewer
+The most advanced BIN model viewer is here!
 
-- **Textures** loaded from the `ART/` folder of the same archive
-- **Palette fallback**: `METALCR2.ACT` → `VGA.ACT` → bundled `METALCR2.ACT`
+- **Textures** loaded from the `ART/` folder of the same POD archive
+- **Palette selection**: Selectable palettes from MTM1, Hellbender, TV/F3, CPR, greyscale and all those included in the POD file. Priority goes to same-name ACT.
 - **Stats overlay**: format, vertex count, polygon count, magnify power, base Z, texture list
-- **Texture strip**: clickable thumbnails for every texture referenced by the model
-- **Wireframe** and **Grid** toggles
+- **Texture strip**: clickable thumbnails for every RAW texture referenced by the model
+- **Wireframe**, **texture smoothing**, **selectable lighting** and **grid** options.
 - Correct depth precision via model-scale-calibrated near/far planes
 
 ---
@@ -109,7 +110,7 @@ src/
 
 | Project | Description |
 |---------|-------------|
-| [JPod](https://github.com/juanputrerasm/jpod) | Java desktop POD manager — the original this is ported from |
+| [JPod](https://github.com/juanputrerasm/jpod) | Java desktop POD manager - the original this is ported from |
 | [JSTruckViewer](https://github.com/juanputrerasm/jstruckviewer) | Browser-based MTM2 truck (BIN/TRK) viewer |
 | [JSTrackViewer](https://github.com/juanputrerasm/jstrackviewer) | Browser-based MTM2/TV/F3/HB track viewer |
 

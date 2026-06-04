@@ -7,9 +7,9 @@ import { render as renderImage } from "./image-preview.js";
 import { render as renderHex }   from "./hex-preview.js";
 
 const TEXT_EXTENSIONS = new Set([
-  "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX","TXX",
-  "TRK","TRN","NDX","MIC","NAV","TDF","VOX","JSIN","TTY","TVI","JSON","CRS",
-  "DVP","GLT","PIT","LVO","LOC","DMO", "LOG", "RGN", "CMD", "CAR", "200", "400", "480"
+  "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX",
+  "TRK","TRN","NDX","MIC","NAV","TDF","VOX","JSIN","TTY","JSON","CRS",
+  "DVP","GLT","PIT","LVO","LOC","DMO", "LOG", "CMD", "CAR", "200", "400", "480", "ANI", "KLP", "SET"
 ]);
 
 const IMAGE_EXTENSIONS = new Set(["BMP","PNG","JPG","JPEG","GIF","WEBP"]);
@@ -25,7 +25,7 @@ export async function dispatch(container, bytes, context) {
   container.classList.toggle("bin-active", ext === "BIN" || ext === "LWO");
 
   try {
-    if (ext === "RAW" || ext === "CLR") {
+    if (ext === "RAW" ) {
       await renderRaw(container, bytes, context);
       return;
     }

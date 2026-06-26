@@ -135,8 +135,11 @@ function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagn
         break;
       }
       case 0x0000000a:
+        // Face-color block (COLORREF) preceding flat 0x19 (FT_IGNORE_TEX) faces.
+        // It only sets the solid color for those untextured faces — it must NOT
+        // clear the active texture, which stays in effect for later mapped faces.
         if (reader.remaining() < 4) break blocks;
-        reader.skip(4); currentTexture = "";
+        reader.skip(4);
         break;
       case 0x0000000c:
         if (reader.remaining() < 24) break blocks;

@@ -7,6 +7,15 @@ const MAX_CORNERS_PER_FACE = 256;
 const UV_SCALE = 0xff0000;
 const TYPE_TRANSPARENT_MTM = 0x00000011;
 const TYPE_TRANSPARENT_MTM2 = 0x00000033;
+const MRGL_TEXTURE64 = 62;
+const MRGL_MATERIAL = 63;
+const MRGL_MATFACET = 64;
+const MRGL_KEYFRAME64 = 65;
+const MRGL_MATERIAL2 = 66;
+const MRGLMAT_BLEND = 0x0004;
+const MRGLMAT_ALPHATEST = 0x0008;
+const MRGLMAT_TEXSOLID = 0x2000;
+const MRGLMAT2_NORMALMAP = 0x0001;
 const TRANSPARENT_FACE_TYPES = new Set([
   TYPE_TRANSPARENT_MTM,
   TYPE_TRANSPARENT_MTM2,
@@ -23,7 +32,7 @@ export function decodeBinModel(bytes, modelName, origin) {
     magnifyPower: 65536, baseZ: 0,
     vertexCount: 0, polygonCount: 0,
     rawVertexBounds: null,
-    textureNames: [], meshes: []
+    textureNames: [], meshes: [], warnings: []
   };
   if (!bytes?.length || bytes.length < 4) return model;
   const reader = new BinaryReader(bytes);
@@ -85,6 +94,10 @@ function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagn
   const polygons = [];
   const textureNames = new Set();
   let currentTexture = "";
+  let currentSolidColor = 0;
+  let currentMaterial = null;
+  let currentMaterial2 = null;
+  let materialSerial = 0;
   const meshVerts = model.vertices.length;
 
   blocks:
@@ -123,6 +136,24 @@ function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagn
         reader.skip(4);
         currentTexture = upper(reader.readFixedAscii(16));
         break;
+      case MRGL_TEXTURE64:
+        if (reader.remaining() < 68) { model.warnings.push("Truncated MRGL_TEXTURE64 record"); break blocks; }
+        reader.skip(4);
+        currentTexture = upper(reader.readFixedAscii(64));
+        break;
+      case MRGL_MATERIAL:
+        if (reader.remaining() < 44) { model.warnings.push("Truncated MRGL_MATERIAL record"); break blocks; }
+        currentMaterial = readMaterial(reader, ++materialSerial);
+        break;
+      case MRGL_MATERIAL2:
+        if (reader.remaining() < 28) { model.warnings.push("Truncated MRGL_MATERIAL2 record"); break blocks; }
+        currentMaterial2 = readMaterial2(reader);
+        if (currentMaterial2.reserved.some((value) => value !== 0)) model.warnings.push("MRGL_MATERIAL2 has non-zero reserved fields");
+        break;
+      case MRGL_KEYFRAME64:
+        if (reader.remaining() < 4372) { model.warnings.push("Truncated MRGL_KEYFRAME64 record"); break blocks; }
+        reader.skip(4372);
+        break;
       case 0x0000001d: {
         if (reader.remaining() < 24) break blocks;
         reader.skip(4);
@@ -139,7 +170,7 @@ function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagn
         // It only sets the solid color for those untextured faces — it must NOT
         // clear the active texture, which stays in effect for later mapped faces.
         if (reader.remaining() < 4) break blocks;
-        reader.skip(4);
+        currentSolidColor = reader.readInt32() & 0x00ffffff;
         break;
       case 0x0000000c:
         if (reader.remaining() < 24) break blocks;
@@ -165,16 +196,24 @@ function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagn
       }
       case 0x00000011: case 0x00000018: case 0x00000022:
       case 0x00000029: case 0x00000033: case 0x00000034: case 0x0000000e: {
-        const polygon = readMappedFace(reader, token, currentTexture, meshVerts);
+        const polygon = readMappedFace(reader, token, currentTexture, meshVerts, null, null, currentSolidColor);
         if (polygon) { polygons.push(polygon); if (polygon.textureName) textureNames.add(polygon.textureName); }
         break;
       }
       case 0x00000005: case 0x00000019: case 0x00000006: case 0x0000000f: {
-        const polygon = readUnmappedFace(reader, token, currentTexture, meshVerts);
+        const polygon = readUnmappedFace(reader, token, currentTexture, meshVerts, currentSolidColor);
         if (polygon) { polygons.push(polygon); if (polygon.textureName) textureNames.add(polygon.textureName); }
         break;
       }
-      default: break blocks;
+      case MRGL_MATFACET: {
+        const polygon = readMappedFace(reader, token, currentTexture, meshVerts, currentMaterial, currentMaterial2, currentSolidColor);
+        if (polygon) { polygons.push(polygon); if (polygon.textureName) textureNames.add(polygon.textureName); }
+        else model.warnings.push(`Invalid MRGL_MATFACET at byte ${reader.position}`);
+        break;
+      }
+      default:
+        model.warnings.push(`Unsupported BIN opcode ${token} (0x${(token >>> 0).toString(16)}) at byte ${reader.position - 4}; model truncated`);
+        break blocks;
     }
   }
   model.polygons = polygons;
@@ -203,18 +242,24 @@ function buildMeshes(model) {
 
   const grouped = new Map();
   for (const polygon of model.polygons ?? []) {
-    const transparent = TRANSPARENT_FACE_TYPES.has(polygon.type);
-    const key = `${polygon.textureName || "__flat__"}|${transparent ? "alpha" : "opaque"}`;
-    if (!grouped.has(key)) grouped.set(key, { positions: [], normals: [], uvs: [], textureName: polygon.textureName || "", transparent });
+    const flags = polygon.material?.flags ?? 0;
+    const transparent = polygon.material
+      ? !!(flags & (MRGLMAT_BLEND | MRGLMAT_ALPHATEST | MRGLMAT_TEXSOLID))
+      : TRANSPARENT_FACE_TYPES.has(polygon.type);
+    const materialKey = polygon.material ? `material:${polygon.material.id}:${polygon.material2?.normalStrength ?? 1}` : "legacy";
+    const key = `${polygon.textureName || "__flat__"}|${transparent ? "alpha" : "opaque"}|${materialKey}|${polygon.solidColor ?? 0}`;
+    if (!grouped.has(key)) grouped.set(key, { positions: [], normals: [], uvs: [], textureName: polygon.textureName || "", transparent, material: polygon.material, material2: polygon.material2, solid: polygon.type === 0x19, solidColor: polygon.solidColor ?? 0 });
     triangulatePolygon(verts, polygon, grouped.get(key), anchorX, anchorY, anchorZ);
   }
   model.meshes = [...grouped.values()].map((b) => ({
     textureName: b.textureName,
     transparent: b.transparent === true,
+    material: b.material ?? null,
+    material2: b.material2 ?? null,
     positions: new Float32Array(b.positions),
     normals: new Float32Array(b.normals),
     uvs: new Float32Array(b.uvs),
-    color: representativeColor(b.textureName)
+    color: b.solid ? (b.solidColor >>> 0) : representativeColor(b.textureName)
   }));
   return model;
 }
@@ -253,7 +298,7 @@ function computeNormal(a, b, c) {
   return [nx / len, ny / len, nz / len];
 }
 
-function readMappedFace(reader, type, textureName, meshVertexCount) {
+function readMappedFace(reader, type, textureName, meshVertexCount, material = null, material2 = null, solidColor = 0) {
   if (meshVertexCount < 1) return null;
   const n = reader.readInt32();
   if (n < 3 || n > MAX_CORNERS_PER_FACE || reader.remaining() < 16 + n * 12) return null;
@@ -264,10 +309,10 @@ function readMappedFace(reader, type, textureName, meshVertexCount) {
     if (!indicesValidOneBased(vertexIndices, meshVertexCount)) return null;
     for (let i = 0; i < vertexIndices.length; i++) vertexIndices[i]--;
   }
-  return { type, textureName, vertexIndices, textureU, textureV };
+  return { type, textureName, vertexIndices, textureU, textureV, material, material2, solidColor };
 }
 
-function readUnmappedFace(reader, type, textureName, meshVertexCount) {
+function readUnmappedFace(reader, type, textureName, meshVertexCount, solidColor = 0) {
   if (meshVertexCount < 1) return null;
   const n = reader.readInt32();
   if (n < 3 || n > MAX_CORNERS_PER_FACE || reader.remaining() < 16 + n * 4) return null;
@@ -278,8 +323,39 @@ function readUnmappedFace(reader, type, textureName, meshVertexCount) {
     if (!indicesValidOneBased(vertexIndices, meshVertexCount)) return null;
     for (let i = 0; i < vertexIndices.length; i++) vertexIndices[i]--;
   }
-  return { type, textureName, vertexIndices, textureU: new Array(n).fill(0), textureV: new Array(n).fill(0) };
+  return { type, textureName, vertexIndices, textureU: new Array(n).fill(0), textureV: new Array(n).fill(0), solidColor };
 }
+
+function readMaterial(reader, id) {
+  const flags = reader.readInt32() >>> 0;
+  const reflectivity = fixed16(reader.readInt32());
+  const fresnelBias = fixed16(reader.readInt32());
+  const fresnelStrength = fixed16(reader.readInt32());
+  const baseAlpha = fixed16(reader.readInt32());
+  const specPower = fixed16(reader.readInt32());
+  const emissive = fixed16(reader.readInt32());
+  const tint = [fixed16(reader.readInt32()), fixed16(reader.readInt32()), fixed16(reader.readInt32())];
+  const foliage = reader.readInt32() >>> 0;
+  return {
+    id, flags, reflectivity, fresnelBias, fresnelStrength, baseAlpha, specPower, emissive, tint,
+    alphaRef: foliage & 0xffff,
+    translucency: foliage >>> 16
+  };
+}
+
+function readMaterial2(reader) {
+  const flags2 = reader.readInt32() >>> 0;
+  const normalStrength = fixed16(reader.readInt32());
+  const reserved = [];
+  for (let i = 0; i < 5; i++) reserved.push(reader.readInt32());
+  return {
+    flags2,
+    normalStrength: flags2 & MRGLMAT2_NORMALMAP ? normalStrength : 1,
+    reserved
+  };
+}
+
+function fixed16(value) { return value / 65536; }
 
 function indicesValid(indices, count) { return indices.every((i) => i >= 0 && i < count); }
 function indicesValidOneBased(indices, count) { return indices.every((i) => i - 1 >= 0 && i - 1 < count); }

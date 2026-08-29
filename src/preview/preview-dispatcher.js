@@ -1,9 +1,10 @@
 import { render as renderRaw }   from "./raw-preview.js";
 import { render as renderAct }   from "./act-preview.js";
 import { render as renderText }  from "./text-preview.js";
-import { render as renderBin }   from "./bin-preview.js";
+import { dispose as disposeBin, render as renderBin } from "./bin-preview.js";
 import { render as renderWav }   from "./wav-preview.js";
 import { render as renderImage } from "./image-preview.js";
+import { render as renderTga }   from "./tga-preview.js";
 import { render as renderHex }   from "./hex-preview.js";
 
 const TEXT_EXTENSIONS = new Set([
@@ -19,6 +20,7 @@ const IMAGE_MIME = {
 };
 
 export async function dispatch(container, bytes, context) {
+  disposeBin();
   const ext = (context.entry?.title ?? "").toUpperCase().replace(/.*\./, "");
   // bin-active removes container padding so the 3-D viewport can fill the full panel.
   // Must be toggled before rendering so the layout is already correct when the scene sizes itself.
@@ -31,6 +33,10 @@ export async function dispatch(container, bytes, context) {
     }
     if (ext === "ACT") {
       renderAct(container, bytes);
+      return;
+    }
+    if (ext === "TGA") {
+      await renderTga(container, bytes, context);
       return;
     }
     if (ext === "BIN" || ext === "LWO") {

@@ -1,6 +1,7 @@
 import { indexPodFile, readPodEntryBytes } from "./pod-format.js";
 import { decodeBinModel } from "./bin-decoder.js";
 import { decodeRawTexture, decodeActPalette } from "./texture-decoder.js";
+import { decodeTrueColorTexture } from "./image-decoder.js";
 
 const handlers = {
   async indexPod({ opfsPodPath }) {
@@ -29,6 +30,12 @@ const handlers = {
     const raw = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
     const act = actBytes ? (actBytes instanceof Uint8Array ? actBytes : new Uint8Array(actBytes)) : null;
     const result = decodeRawTexture(raw, act, name, width, height);
+    return [result, [result.rgba.buffer]];
+  },
+
+  async decodeImage({ bytes, name, format }) {
+    const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const result = await decodeTrueColorTexture(source, name, format);
     return [result, [result.rgba.buffer]];
   },
 

@@ -44,7 +44,7 @@ export function decodeRawTexture(rawBytes, actBytes, textureName, width, height)
     rgba[o + 2] = palette[ci + 2];
     rgba[o + 3] = 255;
   }
-  return { name: textureName, width: w, height: h, rgba };
+  return { name: textureName, width: w, height: h, rgba, sourceFormat: "RAW" };
 }
 
 export function detectDimensions(byteCount) {

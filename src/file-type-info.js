@@ -9,6 +9,7 @@ const FILE_TYPES = {
   JPG:  { description: "JPEG image",                 icon: "🖼" },
   JPEG: { description: "JPEG image",                 icon: "🖼" },
   PNG:  { description: "PNG image",                  icon: "🖼" },
+  TGA:  { description: "Targa image",                icon: "🖼" },
   WEBP: { description: "WebP image",                 icon: "🖼" },
   TXP:  { description: "Texture palette",            icon: "🎨" },
 

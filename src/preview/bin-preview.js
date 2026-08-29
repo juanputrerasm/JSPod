@@ -5,9 +5,13 @@ import { PALETTES } from "../shared/bundled-palettes.js";
 let _cleanupPrev       = null;
 let _savedPaletteIndex = 0;
 
-export async function render(container, bytes, { entry, podIndex, workerClient, opfsPodPath, selectEntry }) {
+export function dispose() {
   _cleanupPrev?.();
   _cleanupPrev = null;
+}
+
+export async function render(container, bytes, { entry, podIndex, workerClient, opfsPodPath, selectEntry }) {
+  dispose();
 
   // ── Toolbar ────────────────────────────────────────────────────────────────
   const toolbar = document.createElement("div");
@@ -88,17 +92,18 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     model, podIndex, workerClient, opfsPodPath, initFallbackActBytes
   );
 
-  if (missingTextures.length > 0) {
+  const allWarnings = [...(model.warnings ?? []), ...(missingTextures.length ? [`Missing textures: ${missingTextures.join(", ")}`] : [])];
+  if (allWarnings.length > 0) {
     warnings.hidden = false;
-    warnings.innerHTML = `<strong>Missing textures:</strong> ${missingTextures.map(escapeHtml).join(", ")}`;
+    warnings.innerHTML = allWarnings.map((message) => `<div>${escapeHtml(message)}</div>`).join("");
   }
 
   // ── Texture thumbnail strip ────────────────────────────────────────────────
   // When selectEntry is available, clicking a thumbnail navigates to the RAW file.
   const onTexClick = selectEntry
     ? (name) => {
-        const rawEntry = findArtEntry(podIndex, name, ".RAW");
-        if (rawEntry) selectEntry(rawEntry);
+        const bundle = textureMap.get(normalizeTextureStem(name));
+        if (bundle?.entry) selectEntry(bundle.entry);
       }
     : null;
   buildTextureStrip(texViewer, model.textureNames, textureMap, onTexClick);
@@ -139,11 +144,13 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.setSize(viewport.clientWidth || 480, viewport.clientHeight || 360);
+    renderer.domElement.title = "Drag to orbit, scroll to zoom, and press Left/Right Arrow to strafe";
     // Insert canvas before the stats overlay so overlays stay on top.
     viewport.insertBefore(renderer.domElement, viewport.firstChild);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    const removeStrafeControls = installHorizontalCameraStrafe(camera, controls, () => renderer.domElement.isConnected);
 
     // Lighting
     if (lightCheck.checked) {
@@ -160,11 +167,13 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     const wireOn   = wireCheck.checked;
     const smoothOn = smoothCheck.checked;
     const lightOn  = lightCheck.checked;
-    const MatClass = lightOn ? THREE.MeshLambertMaterial : THREE.MeshBasicMaterial;
-
     for (const meshData of model.meshes ?? []) {
-      const texData    = textureMap.get((meshData.textureName ?? "").toUpperCase());
-      const diffuseMap = (texData && texCheck.checked) ? makeDataTexture(texData, smoothOn) : null;
+      const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
+      const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
+      const diffuseMap = (texBundle?.diffuse && texCheck.checked)
+        ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha }) : null;
+      const normalMap = (texBundle?.normal && lightOn && texCheck.checked)
+        ? makeDataTexture(texBundle.normal, smoothOn, { normal: true }) : null;
 
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute("position", new THREE.Float32BufferAttribute(swapYZ(meshData.positions), 3));
@@ -175,19 +184,18 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
       }
       geometry.computeBoundingSphere();
 
-      const material = new MatClass({
-        color:               diffuseMap ? 0xffffff : 0x999999,
-        map:                 diffuseMap,
-        side:                THREE.BackSide,
-        transparent:         !!meshData.transparent,
-        alphaTest:           meshData.transparent ? 0.5 : 0,
-        depthWrite:          true,
-        polygonOffset:       !!meshData.transparent,
-        polygonOffsetFactor: meshData.transparent ? -1 : 0,
-        polygonOffsetUnits:  meshData.transparent ? -4 : 0,
-        wireframe:           wireOn && !diffuseMap,
-      });
+      const material = createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn);
       group.add(new THREE.Mesh(geometry, material));
+      if (meshData.material?.flags & 0x2000) {
+        const solidPass = createPreviewMaterial({
+          ...meshData,
+          material: { ...meshData.material, flags: (meshData.material.flags | 0x0008) & ~(0x0004 | 0x0100 | 0x2000), baseAlpha: 1 }
+        }, diffuseMap, normalMap, lightOn, false);
+        solidPass.depthWrite = true;
+        solidPass.polygonOffset = true;
+        solidPass.polygonOffsetFactor = -1;
+        group.add(new THREE.Mesh(geometry, solidPass));
+      }
 
       // Wireframe overlay on textured geometry — yellow lines, no transparency.
       if (wireOn && diffuseMap) {
@@ -251,6 +259,7 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
       activeScene = null;
       cancelAnimationFrame(animId);
       ro.disconnect();
+      removeStrafeControls();
       controls.dispose();
       renderer.domElement.remove();
       renderer.dispose();
@@ -302,26 +311,47 @@ async function loadTextures(model, podIndex, workerClient, opfsPodPath, fallback
   const usedFallback    = [];
 
   for (const texName of model.textureNames ?? []) {
+    const pngEntry = findArtEntry(podIndex, texName, ".PNG");
+    const tgaEntry = findArtEntry(podIndex, texName, ".TGA");
     const rawEntry = findArtEntry(podIndex, texName, ".RAW");
-    if (!rawEntry) { missingTextures.push(texName); continue; }
+    const diffuseEntry = pngEntry ?? tgaEntry ?? rawEntry;
+    if (!diffuseEntry) { missingTextures.push(texName); continue; }
     try {
-      const { bytes: rawBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: rawEntry });
-      const rawBytes = rawBuf instanceof Uint8Array ? rawBuf : new Uint8Array(rawBuf);
-
-      // Try same-name ACT first; fall through to fallback palette if none exists.
-      const actEntry = findArtEntry(podIndex, texName, ".ACT");
-      let actBytes = null;
-      if (actEntry) {
-        const { bytes: actBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: actEntry });
-        actBytes = actBuf instanceof Uint8Array ? actBuf : new Uint8Array(actBuf);
+      const { bytes: sourceBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: diffuseEntry });
+      const sourceBytes = sourceBuf instanceof Uint8Array ? sourceBuf : new Uint8Array(sourceBuf);
+      let decoded;
+      if (diffuseEntry.title.endsWith(".RAW")) {
+        const actEntry = findArtEntry(podIndex, texName, ".ACT");
+        let actBytes = null;
+        if (actEntry) {
+          const { bytes: actBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: actEntry });
+          actBytes = actBuf instanceof Uint8Array ? actBuf : new Uint8Array(actBuf);
+        } else {
+          actBytes = fallbackActBytes;
+          usedFallback.push(texName);
+        }
+        decoded = await workerClient.call("decodeRaw", { rawBytes: sourceBytes, actBytes, name: texName });
       } else {
-        actBytes = fallbackActBytes;
-        usedFallback.push(texName);
+        const format = diffuseEntry.title.endsWith(".TGA") ? "TGA" : "PNG";
+        decoded = await workerClient.call("decodeImage", { bytes: sourceBytes, name: diffuseEntry.title, format });
+        const warning = hdDimensionWarning(diffuseEntry.title, decoded);
+        if (warning) model.warnings.push(warning);
       }
-
-      const decoded = await workerClient.call("decodeRaw", { rawBytes, actBytes, name: texName });
       if (decoded?.rgba?.length) {
-        textureMap.set(texName.toUpperCase(), decoded);
+        const normalEntry = findArtEntry(podIndex, `${normalizeTextureStem(texName)}_N`, ".PNG")
+          ?? findArtEntry(podIndex, `${normalizeTextureStem(texName)}_N`, ".TGA");
+        let normal = null;
+        if (normalEntry) {
+          const { bytes: normalBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: normalEntry });
+          normal = await workerClient.call("decodeImage", {
+            bytes: normalBuf,
+            name: normalEntry.title,
+            format: normalEntry.title.endsWith(".TGA") ? "TGA" : "PNG"
+          });
+          const warning = hdDimensionWarning(normalEntry.title, normal);
+          if (warning) model.warnings.push(warning);
+        }
+        textureMap.set(normalizeTextureStem(texName), { diffuse: decoded, normal, entry: diffuseEntry, normalEntry });
       } else {
         missingTextures.push(texName);
       }
@@ -369,7 +399,11 @@ async function reloadFallbackTextures(usedFallback, textureMap, newFallbackActBy
       const { bytes: rawBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: rawEntry });
       const rawBytes = rawBuf instanceof Uint8Array ? rawBuf : new Uint8Array(rawBuf);
       const decoded  = await workerClient.call("decodeRaw", { rawBytes, actBytes: newFallbackActBytes, name: texName });
-      if (decoded?.rgba?.length) textureMap.set(texName.toUpperCase(), decoded);
+      if (decoded?.rgba?.length) {
+        const key = normalizeTextureStem(texName);
+        const existing = textureMap.get(key) ?? {};
+        textureMap.set(key, { ...existing, diffuse: decoded, entry: rawEntry });
+      }
     } catch {}
   }
 }
@@ -380,7 +414,7 @@ function buildTextureStrip(container, textureNames, textureMap, onSelect) {
   if (!textureNames?.length) { container.hidden = true; return; }
 
   for (const name of textureNames) {
-    const data = textureMap.get(name.toUpperCase());
+    const data = textureMap.get(normalizeTextureStem(name))?.diffuse;
 
     const canvas = document.createElement("canvas");
     canvas.width  = 64;
@@ -447,11 +481,14 @@ function buildStatsHtml(model, filename) {
 }
 
 // ─── Three.js helpers ─────────────────────────────────────────────────────────
-function makeDataTexture(texData, smooth = false) {
+function makeDataTexture(texData, smooth = false, { rawCutout = false, normal = false } = {}) {
   const data   = new Uint8Array(texData.rgba);
+  if (rawCutout && texData.sourceFormat === "RAW") {
+    for (let i = 0; i < data.length; i += 4) data[i + 3] = data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 ? 0 : 255;
+  }
   const filter = smooth ? THREE.LinearFilter : THREE.NearestFilter;
   const tex    = new THREE.DataTexture(data, texData.width, texData.height, THREE.RGBAFormat);
-  tex.colorSpace      = THREE.SRGBColorSpace;
+  tex.colorSpace      = normal ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   tex.flipY           = true;
   tex.generateMipmaps = false;
   tex.minFilter       = filter;
@@ -459,6 +496,55 @@ function makeDataTexture(texData, smooth = false) {
   tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
   tex.needsUpdate     = true;
   return tex;
+}
+
+function createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn) {
+  const material = meshData.material;
+  const flags = material?.flags ?? 0;
+  const lit = lightOn && (!material || !!(flags & 0x0001));
+  const transparent = material ? !!(flags & 0x0004) : !!meshData.transparent;
+  const alphaTested = material ? !!(flags & 0x0008) : !!meshData.transparent;
+  const tint = material && (flags & 0x0400) ? material.tint : [1, 1, 1];
+  const color = diffuseMap ? rgbMultiplierToHex(tint) : (meshData.color ?? 0x999999);
+  const props = {
+    color,
+    map: diffuseMap,
+    side: material && (flags & 0x0080) ? THREE.DoubleSide : THREE.BackSide,
+    transparent,
+    opacity: transparent ? clamp01(material?.baseAlpha ?? 1) : 1,
+    alphaTest: alphaTested ? ((flags & 0x0800) ? clamp01((material?.alphaRef ?? 128) / 255) : 0.5) : 0,
+    depthWrite: !(flags & 0x0100),
+    blending: flags & 0x0010 ? THREE.AdditiveBlending : THREE.NormalBlending,
+    wireframe: wireOn && !diffuseMap
+  };
+  if (!lit) return new THREE.MeshBasicMaterial(props);
+  const strength = meshData.material2?.normalStrength ?? 1;
+  return new THREE.MeshPhongMaterial({
+    ...props,
+    normalMap,
+    normalScale: normalMap ? new THREE.Vector2(strength, -strength) : undefined,
+    shininess: Math.max(0, material?.specPower ?? 0),
+    emissive: material && (flags & 0x0200) ? 0xffffff : 0x000000,
+    emissiveIntensity: material && (flags & 0x0200) ? clamp01(material.emissive) : 0
+  });
+}
+
+function normalizeTextureStem(name) {
+  const normalized = String(name ?? "").replace(/\\/g, "/").trim().toUpperCase();
+  const title = normalized.slice(normalized.lastIndexOf("/") + 1);
+  return title.replace(/\.[^.]+$/, "");
+}
+
+function rgbMultiplierToHex(rgb) {
+  const channel = (value) => Math.round(clamp01(value) * 255);
+  return (channel(rgb?.[0] ?? 1) << 16) | (channel(rgb?.[1] ?? 1) << 8) | channel(rgb?.[2] ?? 1);
+}
+
+function hdDimensionWarning(name, texture) {
+  const valid = texture.width === texture.height
+    && texture.width >= 32 && texture.width <= 1024
+    && (texture.width & (texture.width - 1)) === 0;
+  return valid ? null : `${name} is ${texture.width}×${texture.height}; the engine will resample it to a square power-of-two size in 32..1024`;
 }
 
 function swapYZ(arr) {
@@ -496,6 +582,35 @@ function snapUvToTexel(value, size) {
 
 function clamp01(v) {
   return Math.min(1, Math.max(0, Number.isFinite(v) ? v : 0));
+}
+
+function installHorizontalCameraStrafe(camera, controls, isActive) {
+  const right = new THREE.Vector3();
+  const onKeyDown = (event) => {
+    if (!isActive() || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey || isTextEntryTarget(event.target)) {
+      return;
+    }
+    const direction = event.key === "ArrowLeft"
+      ? -1
+      : event.key === "ArrowRight" ? 1 : 0;
+    if (!direction) return;
+
+    camera.updateMatrixWorld();
+    right.setFromMatrixColumn(camera.matrixWorld, 0).normalize();
+    const distance = Math.max(camera.position.distanceTo(controls.target), 1);
+    right.multiplyScalar(direction * distance * 0.04);
+    camera.position.add(right);
+    controls.target.add(right);
+    controls.update();
+    event.preventDefault();
+  };
+  window.addEventListener("keydown", onKeyDown);
+  return () => window.removeEventListener("keydown", onKeyDown);
+}
+
+function isTextEntryTarget(target) {
+  const tagName = target?.tagName?.toUpperCase();
+  return target?.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT";
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────

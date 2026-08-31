@@ -2,6 +2,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PALETTES } from "../shared/bundled-palettes.js";
 
+const MRGLMAT_BLEND = 0x0004;
+const MRGLMAT_ALPHATEST = 0x0008;
+const MRGLMAT_ADDITIVE = 0x0010;
+const MRGLMAT_TWOSIDED = 0x0080;
+const MRGLMAT_NOZWRITE = 0x0100;
+const MRGLMAT_ALPHAREF = 0x0800;
+
 let _cleanupPrev       = null;
 let _savedPaletteIndex = 0;
 
@@ -502,19 +509,21 @@ function createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn)
   const material = meshData.material;
   const flags = material?.flags ?? 0;
   const lit = lightOn && (!material || !!(flags & 0x0001));
-  const transparent = material ? !!(flags & 0x0004) : !!meshData.transparent;
-  const alphaTested = material ? !!(flags & 0x0008) : !!meshData.transparent;
+  const alphaTested = material ? !!(flags & MRGLMAT_ALPHATEST) : !!meshData.transparent;
+  // Alpha cutouts belong in Three.js's opaque queue and must populate the depth buffer.
+  // Give ALPHATEST precedence if a modified glass preset still carries BLEND/NOZWRITE.
+  const transparent = material ? !!(flags & MRGLMAT_BLEND) && !alphaTested : !!meshData.transparent && !alphaTested;
   const tint = material && (flags & 0x0400) ? material.tint : [1, 1, 1];
   const color = diffuseMap ? rgbMultiplierToHex(tint) : (meshData.color ?? 0x999999);
   const props = {
     color,
     map: diffuseMap,
-    side: material && (flags & 0x0080) ? THREE.DoubleSide : THREE.BackSide,
+    side: material && (flags & MRGLMAT_TWOSIDED) ? THREE.DoubleSide : THREE.BackSide,
     transparent,
     opacity: transparent ? clamp01(material?.baseAlpha ?? 1) : 1,
-    alphaTest: alphaTested ? ((flags & 0x0800) ? clamp01((material?.alphaRef ?? 128) / 255) : 0.5) : 0,
-    depthWrite: !(flags & 0x0100),
-    blending: flags & 0x0010 ? THREE.AdditiveBlending : THREE.NormalBlending,
+    alphaTest: alphaTested ? ((flags & MRGLMAT_ALPHAREF) ? clamp01((material?.alphaRef ?? 128) / 255) : 0.5) : 0,
+    depthWrite: alphaTested || !(flags & MRGLMAT_NOZWRITE),
+    blending: flags & MRGLMAT_ADDITIVE ? THREE.AdditiveBlending : THREE.NormalBlending,
     wireframe: wireOn && !diffuseMap
   };
   if (!lit) return new THREE.MeshBasicMaterial(props);

@@ -2,6 +2,7 @@ import { archiveTitle, normalizeArchiveName } from "../shared/path-utils.js";
 import { readFile } from "../shared/opfs.js";
 
 const MAX_REASONABLE_ITEMS = 65536;
+const POD1_MAX_ITEMS = 8192;
 
 // ─── POD1 constants ──────────────────────────────────────────────────────────
 const POD1_ENTRY_NAME_SIZE = 32;
@@ -47,7 +48,7 @@ async function readPod1(file) {
   const headerView   = new DataView(headerBuffer);
   const headerBytes  = new Uint8Array(headerBuffer);
   const itemCount    = headerView.getInt32(0, true);
-  validateCount(itemCount);
+  validateCount(itemCount, POD1_MAX_ITEMS);
   const comment      = decodeNullTerminated(headerBytes, 4, POD1_COMMENT_SIZE);
   const legacy = await tryReadPod1Directory(file, itemCount, POD1_ENTRY_NAME_SIZE, POD1_ENTRY_SIZE);
   if (legacy) return { format: "POD1", comment, entries: legacy };
@@ -66,12 +67,12 @@ async function tryReadPod1Directory(file, itemCount, nameSize, entrySize) {
   try {
     for (let i = 0; i < itemCount; i++) {
       const base       = i * entrySize;
-      const name       = decodeNullTerminated(tableBytes8, base, nameSize);
+      const { name, paletteName, pathTerminated } = decodePod1NameField(tableBytes8, base, nameSize);
       const length     = tableView.getUint32(base + nameSize, true);
       const dataOffset = tableView.getUint32(base + nameSize + 4, true);
-      if (!name || !isPlausibleArchivePath(name)) return null;
+      if (!pathTerminated || !name || !isPlausibleArchivePath(name)) return null;
       validateEntry(name, length, dataOffset, file.size);
-      entries.push(makeEntry(name, length, dataOffset));
+      entries.push(makeEntry(name, length, dataOffset, paletteName));
     }
   } catch {
     return null;
@@ -184,18 +185,19 @@ export function findEntriesByExtension(podIndex, ext) {
 }
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
-function makeEntry(name, length, dataOffset) {
+function makeEntry(name, length, dataOffset, paletteName = null) {
   return {
     name,
     normalizedName: normalizeArchiveName(name),
     title: archiveTitle(name),
     length,
-    offset: dataOffset
+    offset: dataOffset,
+    paletteName
   };
 }
 
-function validateCount(count) {
-  if (count < 1 || count > MAX_REASONABLE_ITEMS) {
+function validateCount(count, maximum = MAX_REASONABLE_ITEMS) {
+  if (count < 1 || count > maximum) {
     throw new Error(`Suspicious archive item count: ${count}`);
   }
 }
@@ -210,12 +212,35 @@ function decodeNullTerminated(bytes, offset, maxLen) {
   let end = offset;
   const limit = Math.min(offset + maxLen, bytes.length);
   while (end < limit && bytes[end] !== 0) end++;
-  return decoder.decode(bytes.subarray(offset, end)).trim();
+  return trimPodString(decoder.decode(bytes.subarray(offset, end)));
 }
 
 function decodeNullTerminatedFromTable(bytes, offset) {
   if (offset >= bytes.length) return "";
   let end = offset;
   while (end < bytes.length && bytes[end] !== 0) end++;
-  return decoder.decode(bytes.subarray(offset, end)).trim();
+  return trimPodString(decoder.decode(bytes.subarray(offset, end)));
+}
+
+function decodePod1NameField(bytes, offset, width) {
+  const limit = Math.min(offset + width, bytes.length);
+  let pathEnd = offset;
+  while (pathEnd < limit && bytes[pathEnd] !== 0) pathEnd++;
+  const pathTerminated = pathEnd < limit;
+  const name = trimPodString(decoder.decode(bytes.subarray(offset, pathEnd)));
+  let paletteName = null;
+  if (name.toUpperCase().endsWith(".RAW") && pathEnd < limit - 1) {
+    const paletteStart = pathEnd + 1;
+    let paletteEnd = paletteStart;
+    while (paletteEnd < limit && bytes[paletteEnd] !== 0) paletteEnd++;
+    const candidate = trimPodString(decoder.decode(bytes.subarray(paletteStart, paletteEnd)));
+    if (paletteEnd < limit && candidate.toUpperCase().endsWith(".ACT")) {
+      paletteName = candidate;
+    }
+  }
+  return { name, paletteName, pathTerminated };
+}
+
+function trimPodString(value) {
+  return value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, "");
 }

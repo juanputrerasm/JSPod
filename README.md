@@ -50,6 +50,8 @@ JSPod opens POD, EPD, and ZIP archives without uploading their contents to a ser
 
 The BIN viewer understands classic and modern MTM2 records, including long texture names, material assignments, reflection and color blocks, and material parameters. For diffuse textures it resolves `.PNG`, then `.TGA`, then `.RAW`; `_N` normal maps use DirectX/green-down tangent space. Their RGB channels are decoded as X/Y/Z, alpha is ignored, and the engine has no roughness texture channel.
 
+For early POD1 archives, JSPod also reads the hidden `.ACT` palette name stored after a `.RAW` path in the fixed-width directory field. RAW and BIN palette lists order same-name `.ACT` first, embedded metadata next, and METALCR2 after those. MTM2's same-stem `.ACT` lookup remains the automatic palette source when it exists.
+
 In the interactive BIN preview, use the Left and Right Arrow keys to strafe the camera.
 
 ## Requirements
@@ -132,7 +134,7 @@ src/
 
 ## Credits and license
 
-Developed by **Juan Pablo Utreras** for the Monster Truck Madness community.
+Developed by **Juan Pablo Utreras** for the Monster Truck Madness Guild.
 
 Released under the [Apache License 2.0](LICENSE).
 

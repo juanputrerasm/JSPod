@@ -10,7 +10,7 @@ const MRGLMAT_NOZWRITE = 0x0100;
 const MRGLMAT_ALPHAREF = 0x0800;
 
 let _cleanupPrev       = null;
-let _savedPaletteIndex = 0;
+let _savedPaletteLabel = null;
 
 export function dispose() {
   _cleanupPrev?.();
@@ -92,8 +92,9 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
   viewport.appendChild(statsEl);
 
   // ── Load textures (once — shared between Three.js scene and thumbnail strip)
-  const paletteOptions       = buildBinPaletteOptions(podIndex);
-  const initIndex            = Math.min(_savedPaletteIndex, paletteOptions.length - 1);
+  const paletteOptions       = buildBinPaletteOptions(podIndex, model.textureNames);
+  const savedIndex           = paletteOptions.findIndex((option) => option.label === _savedPaletteLabel);
+  const initIndex            = savedIndex >= 0 ? savedIndex : 0;
   const initFallbackActBytes = await resolveBinFallbackActBytes(paletteOptions[initIndex], workerClient, opfsPodPath);
   const { textureMap, missingTextures, usedFallback } = await loadTextures(
     model, podIndex, workerClient, opfsPodPath, initFallbackActBytes
@@ -300,8 +301,9 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     toolbar.appendChild(palLabel);
 
     palSelect.addEventListener("change", async () => {
-      _savedPaletteIndex = parseInt(palSelect.value, 10);
-      const selected = paletteOptions[_savedPaletteIndex];
+      const selectedIndex = parseInt(palSelect.value, 10);
+      const selected = paletteOptions[selectedIndex];
+      _savedPaletteLabel = selected?.label ?? null;
       const newFallbackActBytes = await resolveBinFallbackActBytes(selected, workerClient, opfsPodPath);
       await reloadFallbackTextures(usedFallback, textureMap, newFallbackActBytes, podIndex, workerClient, opfsPodPath);
       buildTextureStrip(texViewer, model.textureNames, textureMap, onTexClick);
@@ -328,6 +330,8 @@ async function loadTextures(model, podIndex, workerClient, opfsPodPath, fallback
       const sourceBytes = sourceBuf instanceof Uint8Array ? sourceBuf : new Uint8Array(sourceBuf);
       let decoded;
       if (diffuseEntry.title.endsWith(".RAW")) {
+        // MTM2's same-stem ACT is the automatic palette source. Embedded POD1
+        // metadata is exposed in the selector, but never overrides this lookup.
         const actEntry = findArtEntry(podIndex, texName, ".ACT");
         let actBytes = null;
         if (actEntry) {
@@ -370,8 +374,39 @@ async function loadTextures(model, podIndex, workerClient, opfsPodPath, fallback
 }
 
 // ─── Palette helpers for BIN fallback ────────────────────────────────────────
-function buildBinPaletteOptions(podIndex) {
+function buildBinPaletteOptions(podIndex, textureNames) {
   const options = [];
+  const sameNamePalettes = new Map();
+  const metadataPaletteNames = new Map();
+  for (const textureName of textureNames ?? []) {
+    const rawEntry = findArtEntry(podIndex, textureName, ".RAW");
+    if (!rawEntry) continue;
+    const sameAct = findArtEntry(podIndex, textureName, ".ACT");
+    if (sameAct) {
+      sameNamePalettes.set(sameAct.normalizedName, sameAct);
+    }
+    const paletteName = rawEntry?.paletteName?.trim();
+    if (paletteName?.toUpperCase().endsWith(".ACT")) {
+      metadataPaletteNames.set(paletteName.toUpperCase(), paletteName);
+    }
+  }
+
+  for (const entry of sameNamePalettes.values()) {
+    options.push({ label: `${entry.title} (same name)`, entry, sameName: true });
+  }
+  for (const [upperName, paletteName] of metadataPaletteNames) {
+    const entry = podIndex.entries.find((candidate) => candidate.title.toUpperCase() === upperName) ?? null;
+    const option = { label: `${paletteName} (POD metadata)`, podMetadata: true };
+    if (entry) {
+      option.entry = entry;
+    } else if (upperName === "METALCR2.ACT") {
+      option.bytes = PALETTES.metalcr2Mtm1;
+    } else {
+      option.unresolved = true;
+      option.label += " — not in archive";
+    }
+    options.push(option);
+  }
 
   options.push({ label: "METALCR2 (MTM1)",  bytes: PALETTES.metalcr2Mtm1 });
   options.push({ label: "METALCR2 (CPR)",   bytes: PALETTES.metalcr2Cpr });
@@ -381,6 +416,8 @@ function buildBinPaletteOptions(podIndex) {
 
   for (const e of podIndex.entries) {
     if (!e.title.toUpperCase().endsWith(".ACT")) continue;
+    if (sameNamePalettes.has(e.normalizedName)) continue;
+    if (metadataPaletteNames.has(e.title.toUpperCase())) continue;
     options.push({ label: e.title, entry: e });
   }
 
@@ -388,7 +425,7 @@ function buildBinPaletteOptions(podIndex) {
 }
 
 async function resolveBinFallbackActBytes(option, workerClient, opfsPodPath) {
-  if (!option || option.greyscale) return null;
+  if (!option || option.greyscale || option.unresolved) return null;
   if (option.bytes) return option.bytes;
   try {
     const { bytes } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: option.entry });

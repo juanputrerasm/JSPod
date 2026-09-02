@@ -3,12 +3,13 @@ import { detectDimensions, suggestDimensions } from "../worker/texture-decoder.j
 import { normalizeArchiveName, basenameWithoutExtension } from "../shared/path-utils.js";
 import { PALETTES } from "../shared/bundled-palettes.js";
 
-let _savedPaletteIndex = 0;
+let _savedPaletteLabel = null;
 
 export async function render(container, bytes, { entry, podIndex, workerClient, opfsPodPath }) {
   const autoDims      = detectDimensions(bytes.length);
   const paletteOptions = buildPaletteOptions(entry, podIndex);
-  const initIndex      = Math.min(_savedPaletteIndex, paletteOptions.length - 1);
+  const savedIndex     = paletteOptions.findIndex((option) => option.label === _savedPaletteLabel);
+  const initIndex      = savedIndex >= 0 ? savedIndex : 0;
 
   let dims = autoDims;
 
@@ -59,8 +60,9 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
   }
 
   palSelect.addEventListener("change", () => {
-    _savedPaletteIndex = parseInt(palSelect.value, 10);
-    repaint(_savedPaletteIndex);
+    const selectedIndex = parseInt(palSelect.value, 10);
+    _savedPaletteLabel = paletteOptions[selectedIndex]?.label ?? null;
+    repaint(selectedIndex);
   });
 
   dlBtn.addEventListener("click", () => {
@@ -133,6 +135,23 @@ function buildPaletteOptions(entry, podIndex) {
   const sameAct = podIndex.entries.find((e) => e.title.toUpperCase() === `${baseName}.ACT`);
   if (sameAct) options.push({ label: `${sameAct.title} (same name)`, entry: sameAct });
 
+  const metadataName = entry.paletteName?.trim();
+  let metadataEntry = null;
+  if (metadataName?.toUpperCase().endsWith(".ACT")) {
+    const upperMetadataName = metadataName.toUpperCase();
+    metadataEntry = podIndex.entries.find((candidate) => candidate.title.toUpperCase() === upperMetadataName) ?? null;
+    const metadataOption = { label: `${metadataName} (POD metadata)` };
+    if (metadataEntry) {
+      metadataOption.entry = metadataEntry;
+    } else if (upperMetadataName === "METALCR2.ACT") {
+      metadataOption.bytes = PALETTES.metalcr2Mtm1;
+    } else {
+      metadataOption.unresolved = true;
+      metadataOption.label += " — not in archive";
+    }
+    options.push(metadataOption);
+  }
+
   options.push({ label: "METALCR2 (MTM1)",  bytes: PALETTES.metalcr2Mtm1 });
   options.push({ label: "METALCR2 (CPR)",   bytes: PALETTES.metalcr2Cpr });
   options.push({ label: "VGA (Hellbender)", bytes: PALETTES.vgaHB });
@@ -142,7 +161,7 @@ function buildPaletteOptions(entry, podIndex) {
   for (const e of podIndex.entries) {
     if (!e.title.toUpperCase().endsWith(".ACT")) continue;
     const eDir = e.normalizedName.replace(/\/[^/]+$/, "");
-    if (eDir === dirPrefix && e !== sameAct) {
+    if (eDir === dirPrefix && e !== sameAct && e !== metadataEntry) {
       options.push({ label: `${e.title} (same folder)`, entry: e });
     }
   }
@@ -152,7 +171,7 @@ function buildPaletteOptions(entry, podIndex) {
 
 async function resolvePalette(option, defaultOptions, workerClient, opfsPodPath) {
   const opt = option ?? defaultOptions[0];
-  if (!opt || opt.greyscale) return makeGreyscalePalette();
+  if (!opt || opt.greyscale || opt.unresolved) return makeGreyscalePalette();
   if (opt.bytes) return normalizeAct(opt.bytes);
   try {
     const { bytes } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: opt.entry });

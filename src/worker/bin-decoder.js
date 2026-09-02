@@ -246,9 +246,11 @@ function buildMeshes(model) {
     const transparent = polygon.material
       ? !!(flags & (MRGLMAT_BLEND | MRGLMAT_ALPHATEST | MRGLMAT_TEXSOLID))
       : TRANSPARENT_FACE_TYPES.has(polygon.type);
+    const solid = polygon.type === 0x19;
     const materialKey = polygon.material ? `material:${polygon.material.id}:${polygon.material2?.normalStrength ?? 1}` : "legacy";
-    const key = `${polygon.textureName || "__flat__"}|${transparent ? "alpha" : "opaque"}|${materialKey}|${polygon.solidColor ?? 0}`;
-    if (!grouped.has(key)) grouped.set(key, { positions: [], normals: [], uvs: [], textureName: polygon.textureName || "", transparent, material: polygon.material, material2: polygon.material2, solid: polygon.type === 0x19, solidColor: polygon.solidColor ?? 0 });
+    const facetKey = solid ? `solid:${polygon.solidColor ?? 0}` : "textured";
+    const key = `${polygon.textureName || "__flat__"}|${transparent ? "alpha" : "opaque"}|${facetKey}|${materialKey}`;
+    if (!grouped.has(key)) grouped.set(key, { positions: [], normals: [], uvs: [], textureName: polygon.textureName || "", transparent, material: polygon.material, material2: polygon.material2, solid, solidColor: polygon.solidColor ?? 0 });
     triangulatePolygon(verts, polygon, grouped.get(key), anchorX, anchorY, anchorZ);
   }
   model.meshes = [...grouped.values()].map((b) => ({
@@ -256,6 +258,7 @@ function buildMeshes(model) {
     transparent: b.transparent === true,
     material: b.material ?? null,
     material2: b.material2 ?? null,
+    solid: b.solid,
     positions: new Float32Array(b.positions),
     normals: new Float32Array(b.normals),
     uvs: new Float32Array(b.uvs),

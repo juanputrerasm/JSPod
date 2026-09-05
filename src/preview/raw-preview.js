@@ -152,16 +152,28 @@ function buildPaletteOptions(entry, podIndex) {
     options.push(metadataOption);
   }
 
+  // The archive's own METALCR2 outranks the bundled copy, because METALCR2 is not one
+  // palette: CPR ships a different one from MTM1 and MTM2, so the copy the pod carries
+  // is the one known to match its art. A VGA.ACT says the pod belongs to one of the
+  // flight games, and nothing here tells Terminal Velocity from Fury3 or Hellbender,
+  // which is exactly why the pod's own copy is the only safe pick.
+  const archiveMetal = podIndex.entries.find((e) => e.title.toUpperCase() === "METALCR2.ACT") ?? null;
+  const archiveVga   = podIndex.entries.find((e) => e.title.toUpperCase() === "VGA.ACT") ?? null;
+  const ranked = [archiveMetal, archiveVga].filter((e) => e && e !== sameAct && e !== metadataEntry);
+  for (const e of ranked) options.push({ label: `Archive ${e.title}`, entry: e });
+
   options.push({ label: "METALCR2 (MTM1)",  bytes: PALETTES.metalcr2Mtm1 });
   options.push({ label: "METALCR2 (CPR)",   bytes: PALETTES.metalcr2Cpr });
   options.push({ label: "VGA (Hellbender)", bytes: PALETTES.vgaHB });
   options.push({ label: "VGA (TV/F3)",      bytes: PALETTES.vgaTV });
   options.push({ label: "Greyscale",        greyscale: true });
 
+  // Differently-named palettes last, and never the automatic choice: picking whichever
+  // one happened to sit in the same folder was a coin toss dressed up as a rule.
   for (const e of podIndex.entries) {
     if (!e.title.toUpperCase().endsWith(".ACT")) continue;
     const eDir = e.normalizedName.replace(/\/[^/]+$/, "");
-    if (eDir === dirPrefix && e !== sameAct && e !== metadataEntry) {
+    if (eDir === dirPrefix && e !== sameAct && e !== metadataEntry && !ranked.includes(e)) {
       options.push({ label: `${e.title} (same folder)`, entry: e });
     }
   }

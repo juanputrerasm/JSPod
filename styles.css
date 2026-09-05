@@ -329,6 +329,20 @@ body {
   flex-wrap: wrap;
 }
 
+/* Animated BIN: which frame is drawn, and where every frame resolves from. */
+.bin-frame-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(120, 96, 32, 0.24);
+  color: var(--warning);
+  font-size: 12px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
 .toggle-label {
   display: flex;
   align-items: center;

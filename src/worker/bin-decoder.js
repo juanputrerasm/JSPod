@@ -32,7 +32,7 @@ export function decodeBinModel(bytes, modelName, origin) {
     magnifyPower: 65536, baseZ: 0,
     vertexCount: 0, polygonCount: 0,
     rawVertexBounds: null,
-    textureNames: [], meshes: [], warnings: []
+    textureNames: [], meshes: [], warnings: [], frameNames: []
   };
   if (!bytes?.length || bytes.length < 4) return model;
   const reader = new BinaryReader(bytes);
@@ -51,8 +51,42 @@ export function decodeBinModel(bytes, modelName, origin) {
     return model;
   }
   model.format = "ANIMATED_BIN";
+  model.frameNames = readFrameNames(bytes);
   decodeBinPayload(reader, model, 12, false, origin);
   return buildMeshes(model);
+}
+
+// An animated BIN holds no geometry: it is a list of the other BINs that are its
+// frames, and the game cycles them in place. Layout, confirmed against
+// MODELS\REX.BIN in the stock CRAZY98 pod: the header is 0x20, a zero, the frame
+// count, then the usual 65536 magnify constant; a zero vertex count and a zero
+// end-of-blocks token follow, so an animated BIN still parses as an ordinary model
+// that happens to have no geometry. The names begin at byte 24 as NUL-padded ASCII
+// in 16-byte slots.
+function readFrameNames(bytes) {
+  const COUNT_OFFSET = 8;
+  const NAMES_OFFSET = 24;
+  const SLOT_BYTES = 16;
+  if (bytes.length < NAMES_OFFSET + SLOT_BYTES) return [];
+
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let count = view.getInt32(COUNT_OFFSET, true);
+  if (count <= 0) return [];
+  // A truncated file is read as far as it goes rather than rejected outright: the
+  // frames that are there still name real models.
+  count = Math.min(count, Math.floor((bytes.length - NAMES_OFFSET) / SLOT_BYTES));
+
+  const names = [];
+  for (let i = 0; i < count; i++) {
+    const start = NAMES_OFFSET + (i * SLOT_BYTES);
+    let length = 0;
+    while (length < SLOT_BYTES - 1 && bytes[start + length] !== 0) length++;
+    let name = "";
+    for (let j = 0; j < length; j++) name += String.fromCharCode(bytes[start + j]);
+    name = name.trim().toUpperCase();
+    if (name) names.push(name);
+  }
+  return names;
 }
 
 function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagnifyAtDecode, origin) {

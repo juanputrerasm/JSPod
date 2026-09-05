@@ -11,14 +11,40 @@ const MRGLMAT_ALPHAREF = 0x0800;
 
 let _cleanupPrev       = null;
 let _savedPaletteLabel = null;
+// Animation state lives outside the render pass because a frame change re-runs the
+// whole render, and the playing flag, the pending tick and the camera have to
+// survive it. One preview is open at a time, so one set of them is enough.
+let _animation      = null;
+let _frameTimer     = null;
+let _frameKeyHandler = null;
+
+// One second a frame, the rate the stock REX animation is documented to run at. It is
+// not read from the file: every header word in REX.BIN past the frame count and the
+// magnify constant is zero, so there is no rate field there to read.
+const FRAME_MS = 1000;
 
 export function dispose() {
+  if (_animation) { _animation.playing = false; _animation = null; }
+  if (_frameTimer !== null) { clearTimeout(_frameTimer); _frameTimer = null; }
+  if (_frameKeyHandler) {
+    document.removeEventListener("keydown", _frameKeyHandler);
+    _frameKeyHandler = null;
+  }
   _cleanupPrev?.();
   _cleanupPrev = null;
 }
 
-export async function render(container, bytes, { entry, podIndex, workerClient, opfsPodPath, selectEntry }) {
+export async function render(container, bytes, context) {
   dispose();
+  await renderInto(container, bytes, context, null);
+}
+
+/**
+ * Draws one model. `animation` is null for an ordinary BIN and the shared animation
+ * state when the model being drawn is one frame of an animated BIN.
+ */
+async function renderInto(container, bytes, context, animation) {
+  const { entry, podIndex, workerClient, opfsPodPath, selectEntry } = context;
 
   // ── Toolbar ────────────────────────────────────────────────────────────────
   const toolbar = document.createElement("div");
@@ -72,27 +98,67 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
   warnings.className = "bin-warnings";
   warnings.hidden = true;
 
-  container.replaceChildren(toolbar, viewport, texViewer, warnings);
+  if (animation) {
+    container.replaceChildren(toolbar, buildFrameBar(animation), viewport, texViewer, warnings);
+  } else {
+    container.replaceChildren(toolbar, viewport, texViewer, warnings);
+  }
 
-  // ── Decode model (once — reused by scene and texture viewer) ───────────────
-  const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  const model = await workerClient.call("decodeBin", {
-    bytes: uint8, name: entry.title, origin: "LEGACY"
-  });
+  // ── Decode (once — reused by scene and texture viewer) ─────────────────────
+  // `models` is one model for an ordinary BIN and one per frame for an animated one,
+  // so everything below treats an animation as the general case.
+  let models;
+  if (animation) {
+    models = animation.models;
+  } else {
+    const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const decoded = await workerClient.call("decodeBin", {
+      bytes: uint8, name: entry.title, origin: "LEGACY"
+    });
 
-  if (!model || !model.meshes?.length) {
-    viewport.innerHTML = `<p class="preview-error">Format: ${model?.format ?? "UNKNOWN"} — no renderable mesh data.</p>`;
+    // An animated BIN holds no geometry of its own, only the names of the models that
+    // are its frames. C-POD opens on frame 1 and says so across the top of the
+    // viewport, and this does the same rather than reporting an empty model. Every
+    // frame is decoded up front so that stepping the animation never re-reads the
+    // archive or rebuilds the scene.
+    if (decoded?.format === "ANIMATED_BIN" && decoded.frameNames?.length) {
+      const frames = decoded.frameNames.map((name) => ({ name, entry: findModelEntry(podIndex, name) }));
+      const frameModels = [];
+      for (const frame of frames) {
+        frameModels.push(frame.entry
+          ? await decodeFrameModel(frame.entry, context)
+          : { format: "MISSING", meshes: [], textureNames: [], warnings: [] });
+      }
+      _animation = { frames, models: frameModels, index: 0, playing: false, showFrame: null };
+      installFrameKey(container, _animation);
+      await renderInto(container, null, context, _animation);
+      return;
+    }
+    models = [decoded];
+  }
+
+  const frameIndex = () => (animation ? animation.index : 0);
+  const frameLabel = (index) => (animation ? animation.frames[index].name : entry.title);
+
+  if (!models.some((candidate) => candidate?.meshes?.length)) {
+    viewport.innerHTML = `<p class="preview-error">${animation
+      ? "None of this animation's frames are in this archive; they resolve from another pod."
+      : `Format: ${escapeHtml(models[0]?.format ?? "UNKNOWN")} — no renderable mesh data.`}</p>`;
     return;
   }
 
   // ── Stats overlay ──────────────────────────────────────────────────────────
   const statsEl = document.createElement("div");
   statsEl.className = "bin-stats";
-  statsEl.innerHTML = buildStatsHtml(model, entry.title);
+  statsEl.innerHTML = buildStatsHtml(models[frameIndex()], frameLabel(frameIndex()));
   viewport.appendChild(statsEl);
 
   // ── Load textures (once — shared between Three.js scene and thumbnail strip)
-  const paletteOptions       = buildBinPaletteOptions(podIndex, model.textureNames);
+  // Frames of one animation are the same object in different poses and share their
+  // art, so the textures are resolved once over the union of every frame's names.
+  const textureNames = [...new Set(models.flatMap((candidate) => candidate?.textureNames ?? []))];
+  const model = { textureNames, warnings: models.flatMap((candidate) => candidate?.warnings ?? []) };
+  const paletteOptions       = buildBinPaletteOptions(podIndex, textureNames);
   const savedIndex           = paletteOptions.findIndex((option) => option.label === _savedPaletteLabel);
   const initIndex            = savedIndex >= 0 ? savedIndex : 0;
   const initFallbackActBytes = await resolveBinFallbackActBytes(paletteOptions[initIndex], workerClient, opfsPodPath);
@@ -100,7 +166,14 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
     model, podIndex, workerClient, opfsPodPath, initFallbackActBytes
   );
 
-  const allWarnings = [...(model.warnings ?? []), ...(missingTextures.length ? [`Missing textures: ${missingTextures.join(", ")}`] : [])];
+  // Naming the unresolved frames is the whole point: the animation plays for whoever
+  // built the pod and stops dead for anyone without the pod the frame came from.
+  const unresolvedFrames = (animation?.frames ?? []).filter((frame) => !frame.entry).map((frame) => frame.name);
+  const allWarnings = [
+    ...(model.warnings ?? []),
+    ...(missingTextures.length ? [`Missing textures: ${missingTextures.join(", ")}`] : []),
+    ...(unresolvedFrames.length ? [`Animation frames outside this archive: ${unresolvedFrames.join(", ")}`] : []),
+  ];
   if (allWarnings.length > 0) {
     warnings.hidden = false;
     warnings.innerHTML = allWarnings.map((message) => `<div>${escapeHtml(message)}</div>`).join("");
@@ -119,6 +192,7 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
   // ── Background color updates active scene directly (no rebuild) ────────────
   let activeScene  = null;
   let cameraState  = null;
+  let frameGroups  = [];
   bgInput.addEventListener("input", () => {
     if (activeScene) activeScene.background = new THREE.Color(bgInput.value);
   });
@@ -169,53 +243,69 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
       scene.add(ambient, directional);
     }
 
+    // One group per frame, all built up front and all but the current one hidden.
+    // Swapping frames is then a visibility flag: no geometry rebuild, no new grid, and
+    // the camera never moves.
     const group = new THREE.Group();
     scene.add(group);
+    frameGroups = models.map((_, index) => {
+      const frameGroup = new THREE.Group();
+      frameGroup.visible = index === frameIndex();
+      group.add(frameGroup);
+      return frameGroup;
+    });
 
     const wireOn   = wireCheck.checked;
     const smoothOn = smoothCheck.checked;
     const lightOn  = lightCheck.checked;
-    for (const meshData of model.meshes ?? []) {
-      const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
-      const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
-      const diffuseMap = (texBundle?.diffuse && texCheck.checked)
-        ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha }) : null;
-      const normalMap = (texBundle?.normal && lightOn && texCheck.checked)
-        ? makeDataTexture(texBundle.normal, smoothOn, { normal: true }) : null;
+    for (let f = 0; f < models.length; f++) {
+      const target = frameGroups[f];
+      for (const meshData of models[f]?.meshes ?? []) {
+        const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
+        const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
+        const diffuseMap = (texBundle?.diffuse && texCheck.checked)
+          ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha }) : null;
+        const normalMap = (texBundle?.normal && lightOn && texCheck.checked)
+          ? makeDataTexture(texBundle.normal, smoothOn, { normal: true }) : null;
 
-      const geometry = new THREE.BufferGeometry();
-      geometry.setAttribute("position", new THREE.Float32BufferAttribute(swapYZ(meshData.positions), 3));
-      geometry.setAttribute("normal",   new THREE.Float32BufferAttribute(swapYZ(meshData.normals),   3));
-      if (meshData.uvs?.length) {
-        geometry.setAttribute("uv", new THREE.Float32BufferAttribute(
-          buildDisplayUvs(meshData.uvs, diffuseMap), 2));
-      }
-      geometry.computeBoundingSphere();
+        const geometry = new THREE.BufferGeometry();
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(swapYZ(meshData.positions), 3));
+        geometry.setAttribute("normal",   new THREE.Float32BufferAttribute(swapYZ(meshData.normals),   3));
+        if (meshData.uvs?.length) {
+          geometry.setAttribute("uv", new THREE.Float32BufferAttribute(
+            buildDisplayUvs(meshData.uvs, diffuseMap), 2));
+        }
+        geometry.computeBoundingSphere();
 
-      const material = createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn);
-      group.add(new THREE.Mesh(geometry, material));
-      if (meshData.material?.flags & 0x2000) {
-        const solidPass = createPreviewMaterial({
-          ...meshData,
-          material: { ...meshData.material, flags: (meshData.material.flags | 0x0008) & ~(0x0004 | 0x0100 | 0x2000), baseAlpha: 1 }
-        }, diffuseMap, normalMap, lightOn, false);
-        solidPass.depthWrite = true;
-        solidPass.polygonOffset = true;
-        solidPass.polygonOffsetFactor = -1;
-        group.add(new THREE.Mesh(geometry, solidPass));
-      }
+        const material = createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn);
+        target.add(new THREE.Mesh(geometry, material));
+        if (meshData.material?.flags & 0x2000) {
+          const solidPass = createPreviewMaterial({
+            ...meshData,
+            material: { ...meshData.material, flags: (meshData.material.flags | 0x0008) & ~(0x0004 | 0x0100 | 0x2000), baseAlpha: 1 }
+          }, diffuseMap, normalMap, lightOn, false);
+          solidPass.depthWrite = true;
+          solidPass.polygonOffset = true;
+          solidPass.polygonOffsetFactor = -1;
+          target.add(new THREE.Mesh(geometry, solidPass));
+        }
 
-      // Wireframe overlay on textured geometry — yellow lines, no transparency.
-      if (wireOn && diffuseMap) {
-        group.add(new THREE.LineSegments(
-          new THREE.WireframeGeometry(geometry),
-          new THREE.LineBasicMaterial({ color: 0xffff00 })
-        ));
+        // Wireframe overlay on textured geometry — yellow lines, no transparency.
+        if (wireOn && diffuseMap) {
+          target.add(new THREE.LineSegments(
+            new THREE.WireframeGeometry(geometry),
+            new THREE.LineBasicMaterial({ color: 0xffff00 })
+          ));
+        }
       }
     }
 
-    // Grid at model base
+    // Grid at the base of every frame together, so the ground plane and the framing
+    // hold still while the animation runs. setFromObject skips hidden children, so the
+    // frames are made visible for the measurement and hidden again after it.
+    for (const frameGroup of frameGroups) frameGroup.visible = true;
     const box    = new THREE.Box3().setFromObject(group);
+    frameGroups.forEach((frameGroup, index) => { frameGroup.visible = index === frameIndex(); });
     const center = box.getCenter(new THREE.Vector3());
     const size   = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -273,15 +363,28 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
       renderer.dispose();
       grid.geometry.dispose();
       grid.material.dispose();
-      for (const child of group.children) {
+      for (const child of frameGroups.flatMap((frameGroup) => frameGroup.children)) {
         child.geometry?.dispose();
         if (child.material?.map) child.material.map.dispose();
         child.material?.dispose();
       }
+      frameGroups = [];
     };
   }
 
   _cleanupPrev = await buildScene();
+
+  if (animation) {
+    // The only work a frame change does: flip which group is visible and retitle the
+    // overlay. The scene, its textures, the grid and the camera all stay as they are.
+    animation.showFrame = (index) => {
+      const count = models.length;
+      animation.index = ((index % count) + count) % count;
+      frameGroups.forEach((frameGroup, i) => { frameGroup.visible = i === animation.index; });
+      statsEl.innerHTML = buildStatsHtml(models[animation.index], frameLabel(animation.index));
+      animation.updateBar?.();
+    };
+  }
 
   // ── Default palette selector (textures with no same-name ACT) ─────────────
   if (usedFallback.length > 0) {
@@ -309,8 +412,118 @@ export async function render(container, bytes, { entry, podIndex, workerClient, 
       buildTextureStrip(texViewer, model.textureNames, textureMap, onTexClick);
       _cleanupPrev?.(); _cleanupPrev = null;
       _cleanupPrev = await buildScene();
+
+  if (animation) {
+    // The only work a frame change does: flip which group is visible and retitle the
+    // overlay. The scene, its textures, the grid and the camera all stay as they are.
+    animation.showFrame = (index) => {
+      const count = models.length;
+      animation.index = ((index % count) + count) % count;
+      frameGroups.forEach((frameGroup, i) => { frameGroup.visible = i === animation.index; });
+      statsEl.innerHTML = buildStatsHtml(models[animation.index], frameLabel(animation.index));
+      animation.updateBar?.();
+    };
+  }
     });
   }
+}
+
+// ─── Animated BIN frames ──────────────────────────────────────────────────────
+
+/**
+ * Where a frame model lives. Frames are stored as bare file names, so they are
+ * looked up the way the game looks them up: MODELS first, then anywhere.
+ */
+function findModelEntry(podIndex, name) {
+  const target = String(name ?? "").replace(/\\/g, "/").trim().toUpperCase();
+  if (!target) return null;
+  const withExt = target.includes(".") ? target : `${target}.BIN`;
+  for (const path of [`MODELS/${withExt}`, `ART/${withExt}`, `DATA/${withExt}`, withExt]) {
+    const hit = podIndex.entries.find((e) => e.normalizedName === path);
+    if (hit) return hit;
+  }
+  return podIndex.entries.find((e) => e.title.toUpperCase() === withExt) ?? null;
+}
+
+/** Reads and decodes one frame model, or a stand-in when the archive lacks it. */
+async function decodeFrameModel(entry, context) {
+  const { bytes } = await context.workerClient.call("readEntryBytes", {
+    opfsPodPath: context.opfsPodPath, entry
+  });
+  const frameBytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  return context.workerClient.call("decodeBin", {
+    bytes: frameBytes, name: entry.title, origin: "LEGACY"
+  });
+}
+
+function togglePlayback(animation) {
+  if (animation.playing) {
+    animation.playing = false;
+    if (_frameTimer !== null) { clearTimeout(_frameTimer); _frameTimer = null; }
+    animation.updateBar?.();
+    return;
+  }
+  animation.playing = true;
+  animation.updateBar?.();
+  // Chained timeouts rather than an interval, so a stalled tab resumes at one frame a
+  // second instead of firing every missed frame at once.
+  const step = () => {
+    if (!animation.playing) return;
+    animation.showFrame?.(animation.index + 1);
+    _frameTimer = setTimeout(step, FRAME_MS);
+  };
+  _frameTimer = setTimeout(step, FRAME_MS);
+}
+
+function installFrameKey(container, animation) {
+  _frameKeyHandler = (event) => {
+    if (event.key !== "a" && event.key !== "A") return;
+    if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+    if (!container.isConnected) return;
+    event.preventDefault();
+    togglePlayback(animation);
+  };
+  document.addEventListener("keydown", _frameKeyHandler);
+}
+
+/**
+ * The banner across the top of the viewport: which frame is showing, where every
+ * frame resolves from, and the control that steps them. It is built once and updated
+ * in place through `animation.updateBar`.
+ */
+function buildFrameBar(animation) {
+  const bar = document.createElement("div");
+  bar.className = "bin-frame-bar";
+
+  const label = document.createElement("span");
+
+  const select = document.createElement("select");
+  select.className = "raw-palette-select";
+  select.title = "Animation frames, and where each one resolves from";
+  animation.frames.forEach((frame, i) => {
+    const option = document.createElement("option");
+    option.value = String(i);
+    option.textContent = `${frame.name} — ${frame.entry ? frame.entry.title : "not in this archive"}`;
+    select.appendChild(option);
+  });
+  select.addEventListener("change", () => {
+    if (animation.playing) togglePlayback(animation);
+    animation.showFrame?.(parseInt(select.value, 10));
+  });
+
+  const play = document.createElement("button");
+  play.className = "btn";
+  play.addEventListener("click", () => togglePlayback(animation));
+
+  animation.updateBar = () => {
+    label.textContent = `Animated BIN — frame ${animation.index + 1} of ${animation.frames.length}`;
+    select.value = String(animation.index);
+    play.textContent = animation.playing ? "Stop (A)" : "Play (A)";
+  };
+  animation.updateBar();
+
+  bar.append(label, select, play);
+  return bar;
 }
 
 // ─── Texture loading ──────────────────────────────────────────────────────────
@@ -391,9 +604,6 @@ function buildBinPaletteOptions(podIndex, textureNames) {
     }
   }
 
-  for (const entry of sameNamePalettes.values()) {
-    options.push({ label: `${entry.title} (same name)`, entry, sameName: true });
-  }
   for (const [upperName, paletteName] of metadataPaletteNames) {
     const entry = podIndex.entries.find((candidate) => candidate.title.toUpperCase() === upperName) ?? null;
     const option = { label: `${paletteName} (POD metadata)`, podMetadata: true };
@@ -408,16 +618,34 @@ function buildBinPaletteOptions(podIndex, textureNames) {
     options.push(option);
   }
 
+  // Same ranking as the RAW preview: the pod's own METALCR2 before the bundled copies,
+  // because CPR's METALCR2 is not MTM1's, and its VGA.ACT before them because a pod
+  // that carries one is a flight game whose exact title cannot be told from here.
+  const archiveMetal = podIndex.entries.find((e) => e.title.toUpperCase() === "METALCR2.ACT") ?? null;
+  const archiveVga   = podIndex.entries.find((e) => e.title.toUpperCase() === "VGA.ACT") ?? null;
+  const ranked = [archiveMetal, archiveVga].filter((e) =>
+    e && !sameNamePalettes.has(e.normalizedName) && !metadataPaletteNames.has(e.title.toUpperCase()));
+  for (const e of ranked) options.push({ label: `Archive ${e.title}`, entry: e });
+
   options.push({ label: "METALCR2 (MTM1)",  bytes: PALETTES.metalcr2Mtm1 });
   options.push({ label: "METALCR2 (CPR)",   bytes: PALETTES.metalcr2Cpr });
   options.push({ label: "VGA (Hellbender)", bytes: PALETTES.vgaHB });
   options.push({ label: "VGA (TV/F3)",      bytes: PALETTES.vgaTV });
   options.push({ label: "Greyscale",        greyscale: true });
 
+  // Same-name palettes are listed but never lead, because this selector only supplies
+  // the fallback for textures that have no same-name ACT of their own. Handing those
+  // some other texture's palette is a guess; METALCR2 is not.
+  for (const entry of sameNamePalettes.values()) {
+    options.push({ label: `${entry.title} (same name)`, entry });
+  }
+
+  // Differently-named palettes last, and never the automatic choice.
   for (const e of podIndex.entries) {
     if (!e.title.toUpperCase().endsWith(".ACT")) continue;
     if (sameNamePalettes.has(e.normalizedName)) continue;
     if (metadataPaletteNames.has(e.title.toUpperCase())) continue;
+    if (ranked.includes(e)) continue;
     options.push({ label: e.title, entry: e });
   }
 

@@ -39,7 +39,7 @@ const FILE_TYPES = {
   // 3D models
   BIN:  { description: "3D model (BIN mesh)",        icon: "📦" },
   LWO:  { description: "LightWave 3D object",        icon: "📦" },
-  ANI:  { description: "Animated terrain textures",             icon: "📄" },
+  ANI:  { description: "Animated texture table",             icon: "📄" },
   CMD:  { description: "CPR car data",             icon: "📄" },
 
   // Audio
@@ -50,8 +50,13 @@ const FILE_TYPES = {
 
   // Game data / track format
   SIT:  { description: "Situation (track definition)", icon: "🗺" },
+  SI2:  { description: "Situation, CommPatch 3+ engine", icon: "🗺" },
+  SIX:  { description: "Situation, disabled",        icon: "🗺" },
+  SIY:  { description: "Situation, CommPatch 3+ engine, disabled", icon: "🗺" },
+  TXV:  { description: "Track version manifest",     icon: "📋" },
   LVL:  { description: "Level definition file",                       icon: "🗺" },
   TRK:  { description: "Truck definition file",             icon: "🛻" },
+  TRX:  { description: "Truck definition file, disabled",   icon: "🛻" },
   CAR:  { description: "CPR Vehicle definition file",             icon: "🛻" },
   TRN:  { description: "Terrain/transition data",    icon: "📄" },
   TXX:  { description: "Traxx track file",    icon: "📄" },
@@ -97,6 +102,46 @@ const FILE_TYPES = {
 
 const DEFAULT_TYPE = { description: "Unknown file", icon: "📄" };
 
+// The derived maps CommPatch 26 resolves beside a texture stem. A texture is looked
+// up by stem, so FOO.PNG carries FOO_N, FOO_AO, FOO_DTL and FOO_MASK into a pod with
+// it; without the suffix spelled out those read as plain pictures in the entry list.
+// Longest first, so a stem is never claimed by a suffix that is only part of its own.
+const HD_MAP_ROLES = [
+  ["_MASK", "terrain detail mask"],
+  ["_DTL",  "terrain detail normal"],
+  ["_AO",   "ambient occlusion"],
+  ["_N",    "normal map"],
+];
+
+const ART_EXTENSIONS = new Set(["RAW", "PNG", "TGA"]);
+
+function extensionOf(filename) {
+  return String(filename ?? "").toUpperCase().replace(/.*\./, "");
+}
+
+/** The map role a file name's stem declares, or null for a plain texture. */
+export function getHdMapRole(filename) {
+  const stem = String(filename ?? "")
+    .toUpperCase()
+    .replace(/.*[\\/]/, "")
+    .replace(/\.[^.]*$/, "");
+  for (const [suffix, role] of HD_MAP_ROLES) {
+    // A bare "_N.PNG" has no stem to be a map of, so the suffix has to be carried.
+    if (stem.length > suffix.length && stem.endsWith(suffix)) return role;
+  }
+  return null;
+}
+
+// A description that already ends in a parenthetical gains the role inside it, so a
+// RAW keeps one set of brackets rather than two.
+function withMapRole(description, filename) {
+  const role = getHdMapRole(filename);
+  if (!role) return description;
+  return description.endsWith(")")
+    ? `${description.slice(0, -1)}, ${role})`
+    : `${description} (${role})`;
+}
+
 export function getFileTypeInfo(filename) {
   const ext = String(filename ?? "")
     .toUpperCase()
@@ -105,12 +150,14 @@ export function getFileTypeInfo(filename) {
 }
 
 export function getRawDescription(filename, byteLength) {
-  const ext = String(filename ?? "")
-    .toUpperCase()
-    .replace(/.*\./, "");
-  if (ext !== "RAW" && ext !== "CLR") {
-    return getFileTypeInfo(filename).description;
-  }
+  const ext = extensionOf(filename);
+  const base = (ext === "RAW" || ext === "CLR")
+    ? rawSizeDescription(byteLength)
+    : getFileTypeInfo(filename).description;
+  return ART_EXTENSIONS.has(ext) ? withMapRole(base, filename) : base;
+}
+
+function rawSizeDescription(byteLength) {
   if (byteLength === 4096)  return "RAW image data (64×64)";
   if (byteLength === 65536) return "RAW image data (256×256)";
   const side = Math.round(Math.sqrt(byteLength));

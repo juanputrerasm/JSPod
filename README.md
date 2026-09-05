@@ -41,16 +41,26 @@ JSPod opens POD, EPD, and ZIP archives without uploading their contents to a ser
 
 | File types | Preview |
 |---|---|
-| `.BIN`, `.LWO` | Interactive Three.js model viewer with orbit controls |
+| `.BIN`, `.LWO` | Interactive Three.js model viewer with orbit controls. An animated BIN opens on frame 1 with a bar naming every frame and where it resolves from; **Play** or the **A** key steps through them |
 | `.RAW` | Paletted or grayscale texture with automatic dimension detection and ACT palette selection |
 | `.ACT` | 256-color palette grid |
 | `.PNG`, `.TGA`, `.BMP`, `.JPG`, `.JPEG`, `.GIF`, `.WEBP` | Image preview |
-| `.TXT`, `.INI`, `.TRK`, `.SIT`, `.LVL`, `.DEF`, and other text formats | Text preview |
+| `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SIX`, `.SIY`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, and other text formats | Text preview |
 | `.WAV` | Audio player |
+
+CommPatch tracks and the disabled forms of tracks and trucks are described and
+previewed alongside the originals: `.SI2` is a track only newer engines see, `.TXV`
+is the plain-text record asserting what the pod around it contains, and `.SIX`,
+`.SIY` and `.TRX` are `.SIT`, `.SI2` and `.TRK` renamed to something the game passes
+over. Art files name the map they are: a `_N`, `_AO`, `_DTL` or `_MASK` suffix on a
+`.RAW`, `.PNG` or `.TGA` stem is reported as a normal map, ambient occlusion,
+terrain detail normal or terrain detail mask.
 
 The BIN viewer understands classic and modern MTM2 records, including long texture names, material assignments, reflection and color blocks, and material parameters. For diffuse textures it resolves `.PNG`, then `.TGA`, then `.RAW`; `_N` normal maps use DirectX/green-down tangent space. Their RGB channels are decoded as X/Y/Z, alpha is ignored, and the engine has no roughness texture channel.
 
-For early POD1 archives, JSPod also reads the hidden `.ACT` palette name stored after a `.RAW` path in the fixed-width directory field. RAW and BIN palette lists order same-name `.ACT` first, embedded metadata next, and METALCR2 after those. MTM2's same-stem `.ACT` lookup remains the automatic palette source when it exists.
+For early POD1 archives, JSPod also reads the hidden `.ACT` palette name stored after a `.RAW` path in the fixed-width directory field.
+
+Palettes are ranked the same way in the RAW preview and the BIN texture fallback: the entry's own same-name `.ACT` and the name recorded in the directory field first, then the archive's own `METALCR2.ACT`, then its `VGA.ACT`, then the bundled palettes, greyscale, and every differently-named `.ACT` last. The archive's own METALCR2 outranks the bundled copy because METALCR2 is not one palette - CPR ships a different one from MTM1 and MTM2 - and a `VGA.ACT` in the pod means a flight game whose exact title cannot be told apart from here, so the pod's copy is the only safe pick. A differently-named `.ACT` is offered but never chosen automatically. The BIN selector supplies the fallback for textures that have no same-name `.ACT`, so same-name palettes belonging to other textures are listed there but never lead.
 
 In the interactive BIN preview, use the Left and Right Arrow keys to strafe the camera.
 

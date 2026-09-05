@@ -10,7 +10,10 @@ import { render as renderHex }   from "./hex-preview.js";
 const TEXT_EXTENSIONS = new Set([
   "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX",
   "TRK","TRN","NDX","MIC","NAV","TDF","VOX","JSIN","TTY","JSON","CRS",
-  "DVP","GLT","PIT","LVO","LOC","DMO", "LOG", "CMD", "CAR", "200", "400", "480", "ANI", "KLP", "SET"
+  "DVP","GLT","PIT","LVO","LOC","DMO", "LOG", "CMD", "CAR", "200", "400", "480", "ANI", "KLP", "SET",
+  // CommPatch tracks, and the disabled forms of tracks and trucks. Disabling only
+  // renames the file, so the payload is the same text it was before.
+  "SI2","SIX","SIY","TRX","TXV"
 ]);
 
 const IMAGE_EXTENSIONS = new Set(["BMP","PNG","JPG","JPEG","GIF","WEBP"]);

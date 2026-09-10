@@ -18,6 +18,26 @@ export function decodeActPalette(actBytes) {
   return out;
 }
 
+/*
+  Merges a 4x4 Evolution .OPA opacity plane into a decoded image.
+
+  An .OPA is an unheadered byte per pixel, paired with its texture by stem, and it holds a
+  real gradient rather than a mask - AS3PINE1.OPA uses all 256 levels. That is the difference
+  from the MTM family, which has no alpha anywhere and cuts texels by colour key instead, so
+  an .OPA must not be routed through that path or every soft foliage edge hardens into a
+  stencil.
+
+  A plane whose length does not match the image's pixel count means the pairing was wrong,
+  not that the plane needs resampling, so it is ignored rather than stretched.
+*/
+export function applyOpacityPlane(decoded, opaBytes) {
+  if (!decoded || !opaBytes) return decoded;
+  const pixels = decoded.width * decoded.height;
+  if (opaBytes.length !== pixels) return decoded;
+  for (let i = 0; i < pixels; i++) decoded.rgba[i * 4 + 3] = opaBytes[i];
+  return { ...decoded, hasAlpha: true };
+}
+
 export function decodeRawTexture(rawBytes, actBytes, textureName, width, height) {
   const palette = actBytes ? (decodeActPalette(actBytes) ?? makeGreyscalePalette()) : makeGreyscalePalette();
 

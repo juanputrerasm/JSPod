@@ -12,6 +12,9 @@ const FILE_TYPES = {
   TGA:  { description: "Targa image",                icon: "🖼" },
   WEBP: { description: "WebP image",                 icon: "🖼" },
   TXP:  { description: "Texture palette",            icon: "🎨" },
+  TIF:  { description: "TIFF image",                 icon: "🖼" },
+  TIFF: { description: "TIFF image",                 icon: "🖼" },
+  OPA:  { description: "Opacity plane",              icon: "🖼" },
 
   // Raw / paletted images
   RAW:  { description: "RAW image data",             icon: "🖼" },
@@ -39,6 +42,7 @@ const FILE_TYPES = {
   // 3D models
   BIN:  { description: "3D model (BIN mesh)",        icon: "📦" },
   LWO:  { description: "LightWave 3D object",        icon: "📦" },
+  SMF:  { description: "3D model (4x4 Evo C3DModel)", icon: "📦" },
   ANI:  { description: "Animated texture table",             icon: "📄" },
   CMD:  { description: "CPR car data",             icon: "📄" },
 
@@ -50,6 +54,10 @@ const FILE_TYPES = {
 
   // Game data / track format
   SIT:  { description: "Situation (track definition)", icon: "🗺" },
+  VEG:  { description: "4x4 Evo vegetation placement", icon: "🌲" },
+  WAT:  { description: "4x4 Evo water material",     icon: "💧" },
+  SDW:  { description: "4x4 Evo shadow overlay grid", icon: "📄" },
+  RTD:  { description: "4x4 Evo terrain auxiliary grid", icon: "📄" },
   SI2:  { description: "Situation, CommPatch 3+ engine", icon: "🗺" },
   SIX:  { description: "Situation, disabled",        icon: "🗺" },
   SIY:  { description: "Situation, CommPatch 3+ engine, disabled", icon: "🗺" },
@@ -151,9 +159,13 @@ export function getFileTypeInfo(filename) {
 
 export function getRawDescription(filename, byteLength) {
   const ext = extensionOf(filename);
+  // An .OPA is an unheadered byte per pixel like a .RAW, so its side length is worth the
+  // same read-out; without it a 65,536-byte opacity plane says nothing about its size.
   const base = (ext === "RAW" || ext === "CLR")
     ? rawSizeDescription(byteLength)
-    : getFileTypeInfo(filename).description;
+    : ext === "OPA"
+      ? rawSizeDescription(byteLength).replace("RAW image data", "Opacity plane")
+      : getFileTypeInfo(filename).description;
   return ART_EXTENSIONS.has(ext) ? withMapRole(base, filename) : base;
 }
 

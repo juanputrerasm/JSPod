@@ -1,7 +1,9 @@
 import { indexPodFile, readPodEntryBytes } from "./pod-format.js";
 import { decodeBinModel } from "./bin-decoder.js";
-import { decodeRawTexture, decodeActPalette } from "./texture-decoder.js";
+import { decodeSmfModel } from "./smf-decoder.js";
+import { decodeRawTexture, decodeActPalette, applyOpacityPlane } from "./texture-decoder.js";
 import { decodeTrueColorTexture } from "./image-decoder.js";
+import { decodeTiffTexture } from "./tiff-decoder.js";
 
 const handlers = {
   async indexPod({ opfsPodPath }) {
@@ -26,10 +28,29 @@ const handlers = {
     return [model, transfers];
   },
 
-  async decodeRaw({ rawBytes, actBytes, name, width, height }) {
+  async decodeSmf({ bytes, name }) {
+    const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const model = decodeSmfModel(uint8, name);
+    const transfers = [];
+    for (const mesh of model.meshes ?? []) {
+      if (mesh.positions) transfers.push(mesh.positions.buffer);
+      if (mesh.normals)   transfers.push(mesh.normals.buffer);
+      if (mesh.uvs)       transfers.push(mesh.uvs.buffer);
+    }
+    return [model, transfers];
+  },
+
+  async decodeRaw({ rawBytes, actBytes, opaBytes, name, width, height }) {
     const raw = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
     const act = actBytes ? (actBytes instanceof Uint8Array ? actBytes : new Uint8Array(actBytes)) : null;
-    const result = decodeRawTexture(raw, act, name, width, height);
+    const opa = opaBytes ? (opaBytes instanceof Uint8Array ? opaBytes : new Uint8Array(opaBytes)) : null;
+    const result = applyOpacityPlane(decodeRawTexture(raw, act, name, width, height), opa);
+    return [result, [result.rgba.buffer]];
+  },
+
+  async decodeTiff({ bytes, name }) {
+    const source = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const result = decodeTiffTexture(source, name);
     return [result, [result.rgba.buffer]];
   },
 

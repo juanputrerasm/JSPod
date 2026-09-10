@@ -477,6 +477,14 @@ body {
   border: 1px solid var(--border);
 }
 
+/* The line under a decoded image that states what it actually is: a TIFF's size and
+   whether it carries the opacity sample, which the picture alone cannot say. */
+.preview-caption {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 /* ── MODAL ────────────────────────────────────────────────────────────────── */
 .main-dialog {
   position: fixed;

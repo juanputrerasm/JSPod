@@ -112,9 +112,14 @@ async function renderInto(container, bytes, context, animation) {
     models = animation.models;
   } else {
     const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-    const decoded = await workerClient.call("decodeBin", {
-      bytes: uint8, name: entry.title, origin: "LEGACY"
-    });
+    /*
+      .SMF is 4x4 Evolution's static model format and shares nothing with .BIN but the job.
+      It is detected by its "C3DModel" magic rather than by extension, so a mis-named entry
+      still opens and a .BIN is never handed to the text parser.
+    */
+    const decoded = isC3DModel(uint8)
+      ? await workerClient.call("decodeSmf", { bytes: uint8, name: entry.title })
+      : await workerClient.call("decodeBin", { bytes: uint8, name: entry.title, origin: "LEGACY" });
 
     // An animated BIN holds no geometry of its own, only the names of the models that
     // are its frames. C-POD opens on frame 1 and says so across the top of the
@@ -263,21 +268,33 @@ async function renderInto(container, bytes, context, animation) {
       for (const meshData of models[f]?.meshes ?? []) {
         const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
         const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
+        // Evo's V runs top-down, the same way an unflipped DataTexture reads its rows, so
+        // .SMF art is uploaded without the flip .BIN art needs.
+        const flipY = models[f]?.uvOrigin !== "top-left";
         const diffuseMap = (texBundle?.diffuse && texCheck.checked)
-          ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha }) : null;
+          ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha, flipY }) : null;
         const normalMap = (texBundle?.normal && lightOn && texCheck.checked)
           ? makeDataTexture(texBundle.normal, smoothOn, { normal: true }) : null;
 
         const geometry = new THREE.BufferGeometry();
-        geometry.setAttribute("position", new THREE.Float32BufferAttribute(swapYZ(meshData.positions), 3));
-        geometry.setAttribute("normal",   new THREE.Float32BufferAttribute(swapYZ(meshData.normals),   3));
+        // .BIN is authored Z-up and is swapped into view space; .SMF is already Y-up and
+        // must be left alone. The model says which, so neither has to be guessed at here.
+        const toView = models[f]?.upAxis === "Y" ? passthrough : swapYZ;
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(toView(meshData.positions), 3));
+        geometry.setAttribute("normal",   new THREE.Float32BufferAttribute(toView(meshData.normals),   3));
         if (meshData.uvs?.length) {
           geometry.setAttribute("uv", new THREE.Float32BufferAttribute(
             buildDisplayUvs(meshData.uvs, diffuseMap), 2));
         }
         geometry.computeBoundingSphere();
 
-        const material = createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn);
+        // Whether the resolved art actually carries alpha is only known here, once the
+        // texture is loaded, so it is handed to the material rather than guessed in the
+        // decoder from a flag the Evo models do not set.
+        const withAlphaFlag = texBundle?.diffuse?.hasAlpha
+          ? { ...meshData, textureHasAlpha: true }
+          : meshData;
+        const material = createPreviewMaterial(withAlphaFlag, diffuseMap, normalMap, lightOn, wireOn);
         target.add(new THREE.Mesh(geometry, material));
         if (meshData.material?.flags & 0x2000) {
           const solidPass = createPreviewMaterial({
@@ -536,13 +553,19 @@ async function loadTextures(model, podIndex, workerClient, opfsPodPath, fallback
     const pngEntry = findArtEntry(podIndex, texName, ".PNG");
     const tgaEntry = findArtEntry(podIndex, texName, ".TGA");
     const rawEntry = findArtEntry(podIndex, texName, ".RAW");
-    const diffuseEntry = pngEntry ?? tgaEntry ?? rawEntry;
+    // Evo 2 model art is palette-indexed .TIF, which browsers do not decode and the
+    // true-colour path cannot help with. It ranks below the HD forms and above .RAW, the
+    // same way the material names it.
+    const tifEntry = findArtEntry(podIndex, texName, ".TIF");
+    const diffuseEntry = pngEntry ?? tgaEntry ?? tifEntry ?? rawEntry;
     if (!diffuseEntry) { missingTextures.push(texName); continue; }
     try {
       const { bytes: sourceBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: diffuseEntry });
       const sourceBytes = sourceBuf instanceof Uint8Array ? sourceBuf : new Uint8Array(sourceBuf);
       let decoded;
-      if (diffuseEntry.title.endsWith(".RAW")) {
+      if (diffuseEntry.title.endsWith(".TIF")) {
+        decoded = await workerClient.call("decodeTiff", { bytes: sourceBytes, name: diffuseEntry.title });
+      } else if (diffuseEntry.title.endsWith(".RAW")) {
         // MTM2's same-stem ACT is the automatic palette source. Embedded POD1
         // metadata is exposed in the selector, but never overrides this lookup.
         const actEntry = findArtEntry(podIndex, texName, ".ACT");
@@ -554,7 +577,18 @@ async function loadTextures(model, podIndex, workerClient, opfsPodPath, fallback
           actBytes = fallbackActBytes;
           usedFallback.push(texName);
         }
-        decoded = await workerClient.call("decodeRaw", { rawBytes: sourceBytes, actBytes, name: texName });
+        /*
+          An Evo .OPA is the texture's opacity plane, paired by stem. It carries a real
+          gradient rather than a mask, so it is merged into the decoded alpha instead of
+          being reduced to a colour key. Pods without one are unaffected.
+        */
+        const opaEntry = findArtEntry(podIndex, texName, ".OPA");
+        let opaBytes = null;
+        if (opaEntry) {
+          const { bytes: opaBuf } = await workerClient.call("readEntryBytes", { opfsPodPath, entry: opaEntry });
+          opaBytes = opaBuf instanceof Uint8Array ? opaBuf : new Uint8Array(opaBuf);
+        }
+        decoded = await workerClient.call("decodeRaw", { rawBytes: sourceBytes, actBytes, opaBytes, name: texName });
       } else {
         const format = diffuseEntry.title.endsWith(".TGA") ? "TGA" : "PNG";
         decoded = await workerClient.call("decodeImage", { bytes: sourceBytes, name: diffuseEntry.title, format });
@@ -753,15 +787,21 @@ function buildStatsHtml(model, filename) {
 }
 
 // ─── Three.js helpers ─────────────────────────────────────────────────────────
-function makeDataTexture(texData, smooth = false, { rawCutout = false, normal = false } = {}) {
+function makeDataTexture(texData, smooth = false, { rawCutout = false, normal = false, flipY = true } = {}) {
   const data   = new Uint8Array(texData.rgba);
-  if (rawCutout && texData.sourceFormat === "RAW") {
+  /*
+    The colour key is the MTM rule: no alpha channel exists anywhere, so a black texel is the
+    cutout. It must not run over art that carries a real alpha channel - an Evo .RAW with its
+    .OPA plane merged, or a two-sample .TIF - because it would discard that alpha and harden
+    every soft edge into a stencil. `hasAlpha` is set by whatever supplied the channel.
+  */
+  if (rawCutout && texData.sourceFormat === "RAW" && !texData.hasAlpha) {
     for (let i = 0; i < data.length; i += 4) data[i + 3] = data[i] === 0 && data[i + 1] === 0 && data[i + 2] === 0 ? 0 : 255;
   }
   const filter = smooth ? THREE.LinearFilter : THREE.NearestFilter;
   const tex    = new THREE.DataTexture(data, texData.width, texData.height, THREE.RGBAFormat);
   tex.colorSpace      = normal ? THREE.NoColorSpace : THREE.SRGBColorSpace;
-  tex.flipY           = true;
+  tex.flipY           = flipY;
   tex.generateMipmaps = false;
   tex.minFilter       = filter;
   tex.magFilter       = filter;
@@ -774,7 +814,14 @@ function createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn)
   const material = meshData.material;
   const flags = material?.flags ?? 0;
   const lit = lightOn && (!material || !!(flags & 0x0001));
-  const alphaTested = material ? !!(flags & MRGLMAT_ALPHATEST) : !!meshData.transparent;
+  /*
+    An .SMF states transparency two ways and the flag is the weaker one: every stock Evo
+    vegetation model writes its material transparent flag as 0 while naming a two-sample .TIF
+    whose second sample is opacity. An alpha channel in the art is the material intent.
+  */
+  const alphaTested = material
+    ? !!(flags & MRGLMAT_ALPHATEST)
+    : !!meshData.transparent || meshData.textureHasAlpha === true;
   // Alpha cutouts belong in Three.js's opaque queue and must populate the depth buffer.
   // Give ALPHATEST precedence if a modified glass preset still carries BLEND/NOZWRITE.
   const transparent = material ? !!(flags & MRGLMAT_BLEND) && !alphaTested : !!meshData.transparent && !alphaTested;
@@ -783,7 +830,8 @@ function createPreviewMaterial(meshData, diffuseMap, normalMap, lightOn, wireOn)
   const props = {
     color,
     map: diffuseMap,
-    side: material && (flags & MRGLMAT_TWOSIDED) ? THREE.DoubleSide : THREE.BackSide,
+    side: meshData.doubleSided || (material && (flags & MRGLMAT_TWOSIDED))
+      ? THREE.DoubleSide : THREE.BackSide,
     transparent,
     opacity: transparent ? clamp01(material?.baseAlpha ?? 1) : 1,
     alphaTest: alphaTested ? ((flags & MRGLMAT_ALPHAREF) ? clamp01((material?.alphaRef ?? 128) / 255) : 0.5) : 0,
@@ -819,6 +867,19 @@ function hdDimensionWarning(name, texture) {
     && texture.width >= 32 && texture.width <= 1024
     && (texture.width & (texture.width - 1)) === 0;
   return valid ? null : `${name} is ${texture.width}×${texture.height}; the engine will resample it to a square power-of-two size in 32..1024`;
+}
+
+/** Geometry that is already on view axes, handed through unchanged. */
+function passthrough(arr) {
+  return arr ?? [];
+}
+
+/** True when these bytes begin a 4x4 Evolution "C3DModel" text model. */
+function isC3DModel(bytes) {
+  const magic = "C3DModel";
+  if (!bytes || bytes.length < magic.length) return false;
+  for (let i = 0; i < magic.length; i++) if (bytes[i] !== magic.charCodeAt(i)) return false;
+  return true;
 }
 
 function swapYZ(arr) {

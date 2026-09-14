@@ -9,8 +9,7 @@ const POD1_ENTRY_NAME_SIZE = 32;
 const POD1_COMMENT_SIZE    = 80;
 const POD1_ENTRY_SIZE      = 40;
 const POD1_HEADER_SIZE     = 84; // 4 count + 80 comment
-const POD1_LONG_NAME_SIZE  = 64;
-const POD1_LONG_ENTRY_SIZE = 72;
+const POD1_MAX_NAME_LENGTH = POD1_ENTRY_NAME_SIZE - 1;   // 31; the NUL takes the last byte
 
 // ─── POD2 constants ──────────────────────────────────────────────────────────
 const POD2_COMMENT_OFFSET  = 8;
@@ -50,15 +49,15 @@ async function readPod1(file) {
   const itemCount    = headerView.getInt32(0, true);
   validateCount(itemCount, POD1_MAX_ITEMS);
   const comment      = decodeNullTerminated(headerBytes, 4, POD1_COMMENT_SIZE);
-  const legacy = await tryReadPod1Directory(file, itemCount, POD1_ENTRY_NAME_SIZE, POD1_ENTRY_SIZE);
-  if (legacy) return { format: "POD1", comment, entries: legacy };
-  const extended = await tryReadPod1Directory(file, itemCount, POD1_LONG_NAME_SIZE, POD1_LONG_ENTRY_SIZE);
-  if (extended) return { format: "Extended POD1", comment, entries: extended };
-  throw new Error("POD1 directory is neither a valid 32-byte nor 64-byte layout.");
+  const entries = await tryReadPod1Directory(file, itemCount);
+  if (!entries) throw new Error("POD1 directory does not validate as 40-byte entries.");
+  return { format: "POD1", comment, entries };
 }
 
-async function tryReadPod1Directory(file, itemCount, nameSize, entrySize) {
-  const tableBytes = itemCount * entrySize;
+// A POD1 directory record is 40 bytes: char name[32], int32 size, int32 offset. That is
+// the only layout there is, so a table that does not validate as one is a refused archive.
+async function tryReadPod1Directory(file, itemCount) {
+  const tableBytes = itemCount * POD1_ENTRY_SIZE;
   if (POD1_HEADER_SIZE + tableBytes > file.size) return null;
   const tableBuffer  = await file.slice(POD1_HEADER_SIZE, POD1_HEADER_SIZE + tableBytes).arrayBuffer();
   const tableView    = new DataView(tableBuffer);
@@ -66,10 +65,13 @@ async function tryReadPod1Directory(file, itemCount, nameSize, entrySize) {
   const entries      = [];
   try {
     for (let i = 0; i < itemCount; i++) {
-      const base       = i * entrySize;
-      const { name, paletteName, pathTerminated } = decodePod1NameField(tableBytes8, base, nameSize);
-      const length     = tableView.getUint32(base + nameSize, true);
-      const dataOffset = tableView.getUint32(base + nameSize + 4, true);
+      const base       = i * POD1_ENTRY_SIZE;
+      const { name, paletteName, pathTerminated } =
+        decodePod1NameField(tableBytes8, base, POD1_ENTRY_NAME_SIZE);
+      // Signed, as the engine reads them: a negative size or pointer is a rejected volume,
+      // not a 2 GB one.
+      const length     = tableView.getInt32(base + POD1_ENTRY_NAME_SIZE, true);
+      const dataOffset = tableView.getInt32(base + POD1_ENTRY_NAME_SIZE + 4, true);
       if (!pathTerminated || !name || !isPlausibleArchivePath(name)) return null;
       validateEntry(name, length, dataOffset, file.size);
       entries.push(makeEntry(name, length, dataOffset, paletteName));
@@ -154,7 +156,7 @@ function isLikelyPathPrefix(s) {
 }
 
 function isPlausibleArchivePath(name) {
-  return !/[\0-\x1f]/.test(name) && !name.includes(":") && name.length <= POD1_LONG_NAME_SIZE - 1;
+  return !/[\0-\x1f]/.test(name) && !name.includes(":") && name.length <= POD1_MAX_NAME_LENGTH;
 }
 
 // ─── Entry reading ────────────────────────────────────────────────────────────
@@ -202,9 +204,14 @@ function validateCount(count, maximum = MAX_REASONABLE_ITEMS) {
   }
 }
 
+// The engine's own volume check: every entry must point at real bytes, and any entry
+// failing it refuses the whole volume rather than just that file.
 function validateEntry(name, length, offset, fileSize) {
+  if (length < 0 || offset < 0) {
+    throw new Error(`Archive entry has a negative size or offset: ${name}`);
+  }
   if (offset > fileSize || length > fileSize - offset) {
-    throw new Error(`Archive entry exceeds file size: ${name}`);
+    throw new Error(`Archive entry runs past end of volume: ${name}`);
   }
 }
 

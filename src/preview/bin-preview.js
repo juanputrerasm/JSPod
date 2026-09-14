@@ -268,20 +268,16 @@ async function renderInto(container, bytes, context, animation) {
       for (const meshData of models[f]?.meshes ?? []) {
         const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
         const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
-        // Evo's V runs top-down, the same way an unflipped DataTexture reads its rows, so
-        // .SMF art is uploaded without the flip .BIN art needs.
-        const flipY = models[f]?.uvOrigin !== "top-left";
         const diffuseMap = (texBundle?.diffuse && texCheck.checked)
-          ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha, flipY }) : null;
+          ? makeDataTexture(texBundle.diffuse, smoothOn, { rawCutout: needsAlpha }) : null;
         const normalMap = (texBundle?.normal && lightOn && texCheck.checked)
           ? makeDataTexture(texBundle.normal, smoothOn, { normal: true }) : null;
 
         const geometry = new THREE.BufferGeometry();
-        // .BIN is authored Z-up and is swapped into view space; .SMF is already Y-up and
-        // must be left alone. The model says which, so neither has to be guessed at here.
-        const toView = models[f]?.upAxis === "Y" ? passthrough : swapYZ;
-        geometry.setAttribute("position", new THREE.Float32BufferAttribute(toView(meshData.positions), 3));
-        geometry.setAttribute("normal",   new THREE.Float32BufferAttribute(toView(meshData.normals),   3));
+        // One transform for every model. .SMF is decoded into the .BIN convention rather
+        // than carrying its own axis flag, so nothing here has to know which format it is.
+        geometry.setAttribute("position", new THREE.Float32BufferAttribute(swapYZ(meshData.positions), 3));
+        geometry.setAttribute("normal",   new THREE.Float32BufferAttribute(swapYZ(meshData.normals),   3));
         if (meshData.uvs?.length) {
           geometry.setAttribute("uv", new THREE.Float32BufferAttribute(
             buildDisplayUvs(meshData.uvs, diffuseMap), 2));
@@ -787,7 +783,7 @@ function buildStatsHtml(model, filename) {
 }
 
 // ─── Three.js helpers ─────────────────────────────────────────────────────────
-function makeDataTexture(texData, smooth = false, { rawCutout = false, normal = false, flipY = true } = {}) {
+function makeDataTexture(texData, smooth = false, { rawCutout = false, normal = false } = {}) {
   const data   = new Uint8Array(texData.rgba);
   /*
     The colour key is the MTM rule: no alpha channel exists anywhere, so a black texel is the
@@ -801,7 +797,7 @@ function makeDataTexture(texData, smooth = false, { rawCutout = false, normal = 
   const filter = smooth ? THREE.LinearFilter : THREE.NearestFilter;
   const tex    = new THREE.DataTexture(data, texData.width, texData.height, THREE.RGBAFormat);
   tex.colorSpace      = normal ? THREE.NoColorSpace : THREE.SRGBColorSpace;
-  tex.flipY           = flipY;
+  tex.flipY           = true;
   tex.generateMipmaps = false;
   tex.minFilter       = filter;
   tex.magFilter       = filter;
@@ -867,11 +863,6 @@ function hdDimensionWarning(name, texture) {
     && texture.width >= 32 && texture.width <= 1024
     && (texture.width & (texture.width - 1)) === 0;
   return valid ? null : `${name} is ${texture.width}×${texture.height}; the engine will resample it to a square power-of-two size in 32..1024`;
-}
-
-/** Geometry that is already on view axes, handed through unchanged. */
-function passthrough(arr) {
-  return arr ?? [];
 }
 
 /** True when these bytes begin a 4x4 Evolution "C3DModel" text model. */

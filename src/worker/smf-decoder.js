@@ -27,17 +27,24 @@
   covers the Evo 2 "v1" bump-material form, a genuine 30-frame animated group, and the v2/v3
   files that carry no LOD header.
 
-  Output deliberately matches what bin-decoder.js produces, so one model viewer draws both.
-  Two things differ and travel with the model rather than being assumed by the viewer:
+  Output is emitted into the SAME convention bin-decoder.js uses, so one model viewer draws
+  both formats with one code path and no per-model branching. This mirrors JSTruckViewer's
+  src/worker/evo/smf-parser.js, which is the reference implementation for Evo models.
 
-    - `upAxis` is "Y". .BIN is Z-up and the preview swaps its axes; .SMF is authored Y-up
-      and must not be swapped. A pine tree is tall in Y, a fallen log is long in Z, and the
-      Evo 2 .SIT `size` field equals the model's XYZ extent for all 57 distinct stock models,
-      which is what settles the axis order rather than inference from a few bounding boxes.
+  Evo is Y-up and .BIN is Z-up, so Y and Z are swapped here. The viewer then applies its own
+  (x, z, -y) transform to every model alike, and the two compose to (x, y, -z): Evo's Z is
+  negated on the way to the screen. That negation is not cosmetic. Getting it wrong leaves
+  the model a mirror image of itself, which reads as the texture being mirrored rather than
+  as the geometry being flipped, because a mirrored mesh still carries its own UVs.
 
-    - `uvOrigin` is "top-left". Evo's V runs top-down; the preview uploads .SMF art without
-      the Y flip it gives .BIN art. Flipping here, as the Blender add-on does because
-      Blender's V is bottom-up, renders every texture upside down.
+  The swap flips handedness, which is what the viewer wants: it draws meshes with BackSide
+  because .BIN geometry is wound inward, so leaving the .SMF winding untouched puts these
+  faces on the same side. Normals are negated for the same reason - BackSide compiles
+  FLIP_SIDED, which negates the vertex normal, so a normal handed over pointing inward comes
+  out of the shader pointing outward.
+
+  V is inverted here for the same reason the .BIN path inverts its own: Evo's V runs
+  top-down and the viewer uploads every texture with flipY, so the two cancel.
 
   Faces are expanded to a triangle soup because that is the shape the .BIN path already
   emits; the models are small enough that the duplication costs nothing.
@@ -141,9 +148,10 @@ export function decodeSmfModel(bytes, modelName) {
         if (line === null) throw new Error(`${modelName}: truncated vertex block in "${groupName}"`);
         if (f !== 0) continue;
         const p = line.split(",");
-        vx[v * 3] = float(p[0]); vx[v * 3 + 1] = float(p[1]); vx[v * 3 + 2] = float(p[2]);
-        vn[v * 3] = float(p[3]); vn[v * 3 + 1] = float(p[4]); vn[v * 3 + 2] = float(p[5]);
-        vt[v * 2] = float(p[6]); vt[v * 2 + 1] = float(p[7]);
+        // Evo (x, y, z) -> viewer-convention (x, z, y); normals negated with it. See above.
+        vx[v * 3] = float(p[0]); vx[v * 3 + 1] = float(p[2]); vx[v * 3 + 2] = float(p[1]);
+        vn[v * 3] = -float(p[3]); vn[v * 3 + 1] = -float(p[5]); vn[v * 3 + 2] = -float(p[4]);
+        vt[v * 2] = float(p[6]); vt[v * 2 + 1] = 1 - float(p[7]);
       }
     }
 
@@ -216,9 +224,6 @@ export function decodeSmfModel(bytes, modelName) {
     fileVersion,
     lodEnabled,
     lodSwitchHeight,
-    // Evo geometry is Y-up and its V runs top-down; see the header comment.
-    upAxis: "Y",
-    uvOrigin: "top-left",
     magnifyPower: null,
     baseZ: null,
     anchor: { x: 0, y: 0, z: 0 },

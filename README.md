@@ -30,12 +30,11 @@ JSPod opens POD, EPD, and ZIP archives without uploading their contents to a ser
 | Format | Description | Support |
 |---|---|---|
 | POD1 | Original Terminal Reality POD layout | Read |
-| POD1-64 (Extended POD1) | POD1-compatible layout with 64-byte entry names | Read |
 | POD2 | POD2 archive layout | Read |
 | EPD | Enhanced POD layout | Read |
 | ZIP | Loads the first POD contained in the ZIP | Read |
 
-“POD1-64” is not an official new POD version. The archive remains POD1-compatible and widens each directory name field from 32 to 64 bytes.
+POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int32 size`, `int32 offset`, holding paths of up to 31 characters. A directory table that does not validate as 40-byte records is a malformed archive and is refused. See [POD1 format](docs/POD1_FORMAT.md).
 
 ## Preview support
 
@@ -64,7 +63,7 @@ For early POD1 archives, JSPod also reads the hidden `.ACT` palette name stored 
 
 Palettes are ranked the same way in the RAW preview and the BIN texture fallback: the entry's own same-name `.ACT` and the name recorded in the directory field first, then the archive's own `METALCR2.ACT`, then its `VGA.ACT`, then the bundled palettes, greyscale, and every differently-named `.ACT` last. The archive's own METALCR2 outranks the bundled copy because METALCR2 is not one palette - CPR ships a different one from MTM1 and MTM2 - and a `VGA.ACT` in the pod means a flight game whose exact title cannot be told apart from here, so the pod's copy is the only safe pick. A differently-named `.ACT` is offered but never chosen automatically. The BIN selector supplies the fallback for textures that have no same-name `.ACT`, so same-name palettes belonging to other textures are listed there but never lead.
 
-`.SMF` is 4x4 Evolution's static model format, a text `C3DModel` covering versions 2 to 4 including Evo 2's `v1` bump materials. It opens in the same viewer, and is detected by its magic rather than its extension so a renamed entry still opens. Two things differ from `.BIN` and travel with the model rather than being assumed by the viewer: Evo geometry is Y-up where `.BIN` is Z-up, and Evo's texture V runs top-down, so its art is uploaded without the vertical flip `.BIN` art needs. Diffuse textures resolve `.PNG`, `.TGA`, `.TIF`, then `.RAW`; an Evo `.RAW` also picks up its same-stem `.OPA` opacity plane, which is a real gradient rather than a mask and so is merged into the alpha channel instead of being reduced to the MTM colour key. Reduced-detail LOD groups are hidden when a model carries its full-detail pair.
+`.SMF` is 4x4 Evolution's static model format, a text `C3DModel` covering versions 2 to 4 including Evo 2's `v1` bump materials. It opens in the same viewer, and is detected by its magic rather than its extension so a renamed entry still opens. Evo is Y-up where `.BIN` is Z-up, and Evo's texture V runs top-down where `.BIN`'s does not, so the decoder converts both into the `.BIN` convention as it reads and the viewer then treats every model alike. That conversion negates Evo's Z on the way to the screen; leaving it out renders the model as its own mirror image, which reads as the texture being mirrored because a mirrored mesh still carries its own UVs. Diffuse textures resolve `.PNG`, `.TGA`, `.TIF`, then `.RAW`; an Evo `.RAW` also picks up its same-stem `.OPA` opacity plane, which is a real gradient rather than a mask and so is merged into the alpha channel instead of being reduced to the MTM colour key. Reduced-detail LOD groups are hidden when a model carries its full-detail pair.
 
 In the interactive BIN preview, use the Left and Right Arrow keys to strafe the camera.
 
@@ -144,7 +143,7 @@ src/
 
 ## Format documentation
 
-- [POD1-64 / Extended POD1](docs/POD1_64_FORMAT.md)
+- [POD1 format](docs/POD1_FORMAT.md)
 - [BIN HD / Extended BIN](docs/BIN_HD_FORMAT.md)
 
 ## Credits and license

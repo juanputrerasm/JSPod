@@ -1,69 +1,30 @@
-const PALETTE_SIZE = 256 * 3; // 768 bytes
-
-export function decodeActPalette(actBytes) {
-  if (!actBytes || actBytes.length < PALETTE_SIZE) return null;
-  const raw = actBytes.subarray(0, PALETTE_SIZE);
-  // Auto-detect 6-bit VGA vs 8-bit Adobe ACT:
-  // If any channel byte > 63, it's a full 8-bit palette (use directly).
-  // Otherwise scale 6-bit VGA: (v * 255 + 31) / 63  (maps 0→0, 63→255 exactly)
-  let is8bit = false;
-  for (let i = 0; i < PALETTE_SIZE; i++) {
-    if (raw[i] > 63) { is8bit = true; break; }
-  }
-  if (is8bit) return raw.slice();
-  const out = new Uint8Array(PALETTE_SIZE);
-  for (let i = 0; i < PALETTE_SIZE; i++) {
-    out[i] = Math.round((raw[i] * 255 + 31) / 63);
-  }
-  return out;
-}
-
 /*
-  Merges a 4x4 Evolution .OPA opacity plane into a decoded image.
+  8-bit textures and palettes.
 
-  An .OPA is an unheadered byte per pixel, paired with its texture by stem, and it holds a
-  real gradient rather than a mask - AS3PINE1.OPA uses all 256 levels. That is the difference
-  from the MTM family, which has no alpha anywhere and cuts texels by colour key instead, so
-  an .OPA must not be routed through that path or every soft foliage edge hardens into a
-  stencil.
-
-  A plane whose length does not match the image's pixel count means the pairing was wrong,
-  not that the plane needs resampling, so it is ignored rather than stretched.
+  Decoding is OpenPhotex's (src/vendor/openphotex): the .ACT bit-depth rule, palette mapping and
+  .OPA opacity planes. What stays here is the viewer's own behaviour: previewing a .RAW at any
+  size the user picks, guessing that size from the byte count, and a greyscale ramp when there
+  is no palette at all.
 */
-export function applyOpacityPlane(decoded, opaBytes) {
-  if (!decoded || !opaBytes) return decoded;
-  const pixels = decoded.width * decoded.height;
-  if (opaBytes.length !== pixels) return decoded;
-  for (let i = 0; i < pixels; i++) decoded.rgba[i * 4 + 3] = opaBytes[i];
-  return { ...decoded, hasAlpha: true };
-}
+import { applyOpacityPlane, decodeActPalette, decodeIndexedImage } from "../vendor/openphotex/index.js";
+
+export { applyOpacityPlane, decodeActPalette };
+
+const PALETTE_SIZE = 256 * 3;
 
 export function decodeRawTexture(rawBytes, actBytes, textureName, width, height) {
-  const palette = actBytes ? (decodeActPalette(actBytes) ?? makeGreyscalePalette()) : makeGreyscalePalette();
+  const palette = (actBytes && decodeActPalette(actBytes)) ?? makeGreyscalePalette();
 
   // Determine dimensions if not explicitly provided
   let w = width ?? 0;
   let h = height ?? 0;
   if (!w || !h) {
-    const dims = detectDimensions(rawBytes.length);
-    if (!dims) {
-    // Best-effort: try square root, then 64×64 fallback
+    // Best-effort: a known size, then the nearest square.
     const side = Math.floor(Math.sqrt(rawBytes.length));
-    dims = [side, side];
-  }
-    [w, h] = dims;
+    [w, h] = detectDimensions(rawBytes.length) ?? [side, side];
   }
 
-  const rgba = new Uint8ClampedArray(w * h * 4);
-  const pixels = Math.min(rawBytes.length, w * h);
-  for (let i = 0; i < pixels; i++) {
-    const ci = rawBytes[i] * 3;
-    const o  = i * 4;
-    rgba[o]     = palette[ci];
-    rgba[o + 1] = palette[ci + 1];
-    rgba[o + 2] = palette[ci + 2];
-    rgba[o + 3] = 255;
-  }
+  const { rgba } = decodeIndexedImage(rawBytes, palette, w, h);
   return { name: textureName, width: w, height: h, rgba, sourceFormat: "RAW" };
 }
 

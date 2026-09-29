@@ -1,4 +1,5 @@
 // Renders a 16×16 grid of color swatches from a 256-color ACT palette.
+import { decodeActPalette } from "../vendor/openphotex/index.js";
 
 export function render(container, bytes) {
   if (!bytes || bytes.length < 768) {
@@ -6,15 +7,8 @@ export function render(container, bytes) {
     return;
   }
 
-  // 6-bit VGA vs 8-bit detection (same logic as texture-decoder.js)
-  let is8bit = false;
-  for (let i = 0; i < 768; i++) {
-    if (bytes[i] > 63) { is8bit = true; break; }
-  }
-  const palette = new Uint8Array(768);
-  for (let i = 0; i < 768; i++) {
-    palette[i] = is8bit ? bytes[i] : Math.round((bytes[i] * 255 + 31) / 63);
-  }
+  // 6-bit VGA or 8-bit: OpenPhotex's rule, the same one every texture is decoded with.
+  const palette = decodeActPalette(bytes);
 
   const CELL  = 24;
   const COLS  = 16;

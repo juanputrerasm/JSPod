@@ -116,6 +116,9 @@ Relative archive paths are resolved against the viewer page. When both parameter
 | OPFS | Temporary per-session archive storage |
 | Three.js r169 | BIN/LWO rendering and camera controls |
 | fflate 0.8.2 | ZIP import and export |
+| [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) | POD/EPD parsing and RAW/ACT/OPA decoding, vendored as plain ES modules in `src/vendor/openphotex/` |
+
+Archive parsing and palette decoding come from OpenPhotex, the shared Terminal Reality format library also used by JSTrackViewer, JSTruckViewer and JSMTM2Converter. The vendored copy is generated, never edited here: change OpenPhotex, then refresh it from the OpenPhotex checkout with `npm run build && npm run vendor -- ../JSPod/src/vendor/openphotex`.
 
 ```text
 src/

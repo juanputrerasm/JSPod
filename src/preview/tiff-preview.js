@@ -1,5 +1,6 @@
 /*
-  Palette-indexed TIFF, the form 4x4 Evolution 2 keeps its model and vegetation art in.
+  TIFF, the form 4x4 Evolution 2 keeps its model and vegetation art in: palette-indexed diffuse
+  textures, and RGB "_BUMP" normal maps.
 
   Browsers do not decode TIFF, so this cannot go through the same path as .PNG. It is drawn
   on a checkerboard because most of these files carry a second sample that is an opacity
@@ -42,8 +43,10 @@ export async function render(container, bytes, context) {
 
   const caption = document.createElement("p");
   caption.className = "preview-caption";
-  caption.textContent = `${decoded.width}x${decoded.height} palette-indexed TIFF`
-    + (decoded.hasAlpha ? ", with an opacity sample" : "");
+  // Palette images are Evo 2's diffuse art; RGB ones are its "_BUMP" tangent-space normal maps.
+  caption.textContent = decoded.kind === "rgb"
+    ? `${decoded.width}x${decoded.height} RGB TIFF (normal map)` + (decoded.hasAlpha ? ", with a fourth sample" : "")
+    : `${decoded.width}x${decoded.height} palette-indexed TIFF` + (decoded.hasAlpha ? ", with an opacity sample" : "");
 
   container.replaceChildren(canvas, caption);
 }

@@ -1,30 +1,32 @@
-import { BinaryReader } from "./binary-reader.js";
+/*
+  .BIN models for JSPod's model viewer.
 
-const SIGNATURE_LWO = 0x4d524f46;
-const SIGNATURE_ANIMATED_BIN = 0x00000020;
-const BLOCK_MRGL_MAGNIFY = 0x00000014;
-const MAX_CORNERS_PER_FACE = 256;
+  Parsing is OpenPhotex's (src/vendor/openphotex): parseBin walks the MRGL record stream the way
+  the engine strides it and returns the model as the file states it, raw vertex words and faces
+  with the texture, colour and material in force when each was read. This file keeps the
+  viewer's own half: scaling to its model units, batching faces into meshes, triangulating and
+  shading them.
+
+  Geometry divisors (BIN_GEOMETRY_DIVISOR): editor units per vertex =
+  (raw >> 1) * 65536 / (magnify * divisor), with 64 for MTM and CPR, 4096 for Hellbender and
+  8192 for Terminal Velocity and Fury3; OpenPhotex's docs/BIN.md gives the evidence.
+  JSPod used 10922.667 for Terminal Velocity and Fury3 until now, which drew those models at 75%
+  of their width; the preview's proportions were unaffected, since every axis scaled alike.
+*/
+import { BIN_GEOMETRY_DIVISOR, MRGL, MRGLMAT, MRGLMAT2, parseBin } from "../vendor/openphotex/index.js";
+
 const UV_SCALE = 0xff0000;
-const TYPE_TRANSPARENT_MTM = 0x00000011;
-const TYPE_TRANSPARENT_MTM2 = 0x00000033;
-const MRGL_TEXTURE64 = 62;
-const MRGL_MATERIAL = 63;
-const MRGL_MATFACET = 64;
-const MRGL_KEYFRAME64 = 65;
-const MRGL_MATERIAL2 = 66;
-const MRGLMAT_BLEND = 0x0004;
-const MRGLMAT_ALPHATEST = 0x0008;
-const MRGLMAT_TEXSOLID = 0x2000;
-const MRGLMAT2_NORMALMAP = 0x0001;
-const TRANSPARENT_FACE_TYPES = new Set([
-  TYPE_TRANSPARENT_MTM,
-  TYPE_TRANSPARENT_MTM2,
-]);
+const TRANSPARENT_FACE_TYPES = new Set([0x11, 0x33]);
+const MRGLMAT_BLEND = MRGLMAT.BLEND;
+const MRGLMAT_ALPHATEST = MRGLMAT.ALPHATEST;
+const MRGLMAT_TEXSOLID = MRGLMAT.TEXSOLID;
 
-// Geometry divisors matching JTraxx constants
-const DIVISOR_LEGACY    = 64.0;
-const DIVISOR_HB        = 4096.0;
-const DIVISOR_TV_F3     = 10922.667;
+/*
+  An ANIMATED_BIN names its frame models and carries no geometry (all 53 stock ones): after the
+  frame count and magnify word come a zero vertex count and MRGL_EOL. This viewer has always run
+  that empty payload through the geometry path too, so the model keeps the same empty fields.
+*/
+const EMPTY_PAYLOAD = { vertexListValid: true, vertices: new Int32Array(0), faces: [], materials: [], materials2: [], magnifyRecords: [], warnings: [], stopReason: null };
 
 export function decodeBinModel(bytes, modelName, origin) {
   const model = {
@@ -35,220 +37,81 @@ export function decodeBinModel(bytes, modelName, origin) {
     textureNames: [], meshes: [], warnings: [], frameNames: []
   };
   if (!bytes?.length || bytes.length < 4) return model;
-  const reader = new BinaryReader(bytes);
-  const firstType = reader.readInt32();
-  if (firstType === SIGNATURE_LWO) { model.format = "LWO"; return model; }
-  if (firstType === BLOCK_MRGL_MAGNIFY) {
+  const bin = parseBin(bytes);
+  if (bin.kind === "lwo") { model.format = "LWO"; return model; }
+  if (bin.kind === "mrgl") {
     model.format = "BIN";
-    if (reader.remaining() < 4) return model;
-    const power = reader.readInt32();
-    if (power > 0) model.magnifyPower = power;
-    decodeBinPayload(reader, model, 8, true, origin);
+    if (bin.magnify === null) return model;
+    if (bin.magnify > 0) model.magnifyPower = bin.magnify;
+    applyPayload(bin, model, 65536.0 / (model.magnifyPower * geometryDivisor(origin)));
     return buildMeshes(model);
   }
-  if (firstType !== SIGNATURE_ANIMATED_BIN) {
-    model.format = `0x${(firstType >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
+  if (bin.kind !== "animated") {
+    model.format = `0x${(bin.signature >>> 0).toString(16).padStart(8, "0").toUpperCase()}`;
     return model;
   }
+  // An animated BIN holds no geometry: it lists the other BINs that are its frames.
   model.format = "ANIMATED_BIN";
-  model.frameNames = readFrameNames(bytes);
-  decodeBinPayload(reader, model, 12, false, origin);
+  model.frameNames = bin.frameNames.map(upper);
+  applyPayload(EMPTY_PAYLOAD, model, 1.0 / BIN_GEOMETRY_DIVISOR.legacy);
   return buildMeshes(model);
 }
 
-// An animated BIN holds no geometry: it is a list of the other BINs that are its
-// frames, and the game cycles them in place. Layout, confirmed against
-// MODELS\REX.BIN in the stock CRAZY98 pod: the header is 0x20, a zero, the frame
-// count, then the usual 65536 magnify constant; a zero vertex count and a zero
-// end-of-blocks token follow, so an animated BIN still parses as an ordinary model
-// that happens to have no geometry. The names begin at byte 24 as NUL-padded ASCII
-// in 16-byte slots.
-function readFrameNames(bytes) {
-  const COUNT_OFFSET = 8;
-  const NAMES_OFFSET = 24;
-  const SLOT_BYTES = 16;
-  if (bytes.length < NAMES_OFFSET + SLOT_BYTES) return [];
-
-  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let count = view.getInt32(COUNT_OFFSET, true);
-  if (count <= 0) return [];
-  // A truncated file is read as far as it goes rather than rejected outright: the
-  // frames that are there still name real models.
-  count = Math.min(count, Math.floor((bytes.length - NAMES_OFFSET) / SLOT_BYTES));
-
-  const names = [];
-  for (let i = 0; i < count; i++) {
-    const start = NAMES_OFFSET + (i * SLOT_BYTES);
-    let length = 0;
-    while (length < SLOT_BYTES - 1 && bytes[start + length] !== 0) length++;
-    let name = "";
-    for (let j = 0; j < length; j++) name += String.fromCharCode(bytes[start + j]);
-    name = name.trim().toUpperCase();
-    if (name) names.push(name);
-  }
-  return names;
+function geometryDivisor(origin) {
+  if (origin === "HB") return BIN_GEOMETRY_DIVISOR.hellbender;
+  if (isTvFamilyOrigin(origin)) return BIN_GEOMETRY_DIVISOR.terminalVelocity;
+  return BIN_GEOMETRY_DIVISOR.legacy;
 }
 
-function decodeBinPayload(reader, model, headerBytesBeforeVertexCount, applyMagnifyAtDecode, origin) {
-  reader.skip(headerBytesBeforeVertexCount);
-  const vertexCount = reader.readInt32();
-  if (vertexCount < 0 || vertexCount > 200000) return;
+function applyPayload(bin, model, scale) {
+  if (!bin.vertexListValid) return;
+  const words = bin.vertices;
   const rawVertices = [];
   let rawBaseZ = 0;
   let rawMinX = Infinity, rawMaxX = -Infinity;
   let rawMinY = Infinity, rawMaxY = -Infinity;
   let rawMinZ = Infinity, rawMaxZ = -Infinity;
-  for (let i = 0; i < vertexCount; i++) {
-    const x = reader.readInt32() >> 1;
-    const z = reader.readInt32() >> 1;
-    const y = reader.readInt32() >> 1;
+  for (let i = 0; i < words.length; i += 3) {
+    // The engine drops each word's low bit; the words are (x, z, y) with z up.
+    const x = words[i] >> 1;
+    const z = words[i + 1] >> 1;
+    const y = words[i + 2] >> 1;
     rawVertices.push({ x, y, z });
     if (x < rawMinX) rawMinX = x; if (x > rawMaxX) rawMaxX = x;
     if (y < rawMinY) rawMinY = y; if (y > rawMaxY) rawMaxY = y;
     if (z < rawMinZ) rawMinZ = z; if (z > rawMaxZ) rawMaxZ = z;
     if (z < rawBaseZ) rawBaseZ = z;
   }
+  // The engine's base height: the lowest z, never above 0, less 31.
   const rawBaseZWithOffset = rawBaseZ - 31;
   model.rawVertexBounds = { vertexCount: rawVertices.length, baseZ: rawBaseZWithOffset, minX: rawMinX, maxX: rawMaxX, minY: rawMinY, maxY: rawMaxY, minZ: rawMinZ, maxZ: rawMaxZ };
-  let scale;
-  if (applyMagnifyAtDecode) {
-    // JTraxx applies magnify scaling at decode time (65536/magnifyPower) then divides by
-    // origin-based geometryDivisor at render time. Combined: 65536/(magnifyPower*divisor).
-    // Legacy shorthand: 65536/(magnifyPower*64) = 1024/magnifyPower.
-    let geometryDivisor;
-    if (origin === "HB") geometryDivisor = DIVISOR_HB;
-    else if (isTvFamilyOrigin(origin)) geometryDivisor = DIVISOR_TV_F3;
-    else geometryDivisor = DIVISOR_LEGACY;
-    scale = 65536.0 / (model.magnifyPower * geometryDivisor);
-  } else {
-    scale = 1.0 / DIVISOR_LEGACY;  // ANIMATED_BIN always uses 1/64
-  }
   model.vertices = rawVertices.map((v) => ({ x: v.x * scale, y: v.y * scale, z: v.z * scale }));
   model.baseZ = rawBaseZWithOffset * scale;
+  const materials = bin.materials.map((material) => ({ ...material, tint: [...material.tint] }));
+  // normalStrength is only meaningful when the record says it carries a normal map.
+  const materials2 = bin.materials2.map(({ flags2, normalStrength, reserved }) => ({
+    flags2, normalStrength: flags2 & MRGLMAT2.NORMALMAP ? normalStrength : 1, reserved: [...reserved],
+  }));
   const polygons = [];
   const textureNames = new Set();
-  let currentTexture = "";
-  let currentSolidColor = 0;
-  let currentMaterial = null;
-  let currentMaterial2 = null;
-  let materialSerial = 0;
-  const meshVerts = model.vertices.length;
-
-  blocks:
-  while (reader.remaining() >= 4) {
-    const token = reader.readInt32();
-    switch (token) {
-      case 0x00000000: break blocks;
-      case 0x00000002: {
-        if (reader.remaining() < 8) break blocks;
-        reader.skip(4);
-        const nv = reader.readInt32();
-        const strip = nv * 12;
-        const tail80 = 20 * 4;
-        if (nv >= 0 && nv <= MAX_CORNERS_PER_FACE && reader.remaining() >= strip + tail80) { reader.skip(strip); reader.skip(tail80); }
-        else if (reader.remaining() >= 34 * 4) { reader.skip(34 * 4); }
-        else break blocks;
-        break;
+  for (const face of bin.faces) {
+    const textureName = upper(face.textureName);
+    const polygon = face.mapped
+      ? {
+        type: face.opcode, textureName, vertexIndices: [...face.vertexIndices], textureU: [...face.u], textureV: [...face.v],
+        // Only MRGL_MATFACET consumes the current material; the legacy face types predate it.
+        material: face.material === null ? null : materials[face.material],
+        material2: face.material2 === null ? null : materials2[face.material2],
+        solidColor: face.solidColor,
       }
-      case 0x00000003: {
-        if (reader.remaining() < 8) break blocks;
-        reader.skip(8);
-        if (meshVerts < 1 || reader.remaining() < meshVerts * 12) break blocks;
-        reader.skip(meshVerts * 12);
-        break;
-      }
-      case 0x00000004: {
-        if (reader.remaining() < 8) break blocks;
-        reader.skip(4);
-        const n = reader.readInt32();
-        if (n < 0 || n > 4096 || reader.remaining() < n * 8) break blocks;
-        reader.skip(n * 8);
-        break;
-      }
-      case 0x0000000d:
-        if (reader.remaining() < 20) break blocks;
-        reader.skip(4);
-        currentTexture = upper(reader.readFixedAscii(16));
-        break;
-      case MRGL_TEXTURE64:
-        if (reader.remaining() < 68) { model.warnings.push("Truncated MRGL_TEXTURE64 record"); break blocks; }
-        reader.skip(4);
-        currentTexture = upper(reader.readFixedAscii(64));
-        break;
-      case MRGL_MATERIAL:
-        if (reader.remaining() < 44) { model.warnings.push("Truncated MRGL_MATERIAL record"); break blocks; }
-        currentMaterial = readMaterial(reader, ++materialSerial);
-        break;
-      case MRGL_MATERIAL2:
-        if (reader.remaining() < 28) { model.warnings.push("Truncated MRGL_MATERIAL2 record"); break blocks; }
-        currentMaterial2 = readMaterial2(reader);
-        if (currentMaterial2.reserved.some((value) => value !== 0)) model.warnings.push("MRGL_MATERIAL2 has non-zero reserved fields");
-        break;
-      case MRGL_KEYFRAME64:
-        if (reader.remaining() < 4372) { model.warnings.push("Truncated MRGL_KEYFRAME64 record"); break blocks; }
-        reader.skip(4372);
-        break;
-      case 0x0000001d: {
-        if (reader.remaining() < 24) break blocks;
-        reader.skip(4);
-        const num = reader.readInt32();
-        reader.skip(16);
-        if (num < 0 || num > 1024) break blocks;
-        if (reader.remaining() >= num * 32) { for (let i = 0; i < num; i++) { const f = upper(reader.readFixedAscii(32)); if (i === 0) currentTexture = f; } }
-        else if (reader.remaining() >= num * 8) { reader.skip(num * 8); }
-        else break blocks;
-        break;
-      }
-      case 0x0000000a:
-        // Face-color block (COLORREF) preceding flat 0x19 (FT_IGNORE_TEX) faces.
-        // It only sets the solid color for those untextured faces — it must NOT
-        // clear the active texture, which stays in effect for later mapped faces.
-        if (reader.remaining() < 4) break blocks;
-        currentSolidColor = reader.readInt32() & 0x00ffffff;
-        break;
-      case 0x0000000c:
-        if (reader.remaining() < 24) break blocks;
-        reader.skip(24); break;
-      case 0x00000012:
-        if (reader.remaining() < 4) break blocks;
-        reader.skip(4); break;
-      case BLOCK_MRGL_MAGNIFY:
-        if (reader.remaining() < 4) break blocks;
-        model.magnifyPower = reader.readInt32(); break;
-      case 0x00000016:
-        if (reader.remaining() < 12) break blocks;
-        reader.skip(12); break;
-      case 0x00000017:
-        if (reader.remaining() < 8) break blocks;
-        reader.skip(8); break;
-      case 0x0000001f: {
-        if (reader.remaining() < 8) break blocks;
-        reader.skip(4);
-        const n = reader.readInt32();
-        if (n < 0 || n > 200000 || reader.remaining() < n * 4) break blocks;
-        reader.skip(n * 4); break;
-      }
-      case 0x00000011: case 0x00000018: case 0x00000022:
-      case 0x00000029: case 0x00000033: case 0x00000034: case 0x0000000e: {
-        const polygon = readMappedFace(reader, token, currentTexture, meshVerts, null, null, currentSolidColor);
-        if (polygon) { polygons.push(polygon); if (polygon.textureName) textureNames.add(polygon.textureName); }
-        break;
-      }
-      case 0x00000005: case 0x00000019: case 0x00000006: case 0x0000000f: {
-        const polygon = readUnmappedFace(reader, token, currentTexture, meshVerts, currentSolidColor);
-        if (polygon) { polygons.push(polygon); if (polygon.textureName) textureNames.add(polygon.textureName); }
-        break;
-      }
-      case MRGL_MATFACET: {
-        const polygon = readMappedFace(reader, token, currentTexture, meshVerts, currentMaterial, currentMaterial2, currentSolidColor);
-        if (polygon) { polygons.push(polygon); if (polygon.textureName) textureNames.add(polygon.textureName); }
-        else model.warnings.push(`Invalid MRGL_MATFACET at byte ${reader.position}`);
-        break;
-      }
-      default:
-        model.warnings.push(`Unsupported BIN opcode ${token} (0x${(token >>> 0).toString(16)}) at byte ${reader.position - 4}; model truncated`);
-        break blocks;
-    }
+      : { type: face.opcode, textureName, vertexIndices: [...face.vertexIndices], textureU: [...face.u], textureV: [...face.v], solidColor: face.solidColor };
+    polygons.push(polygon);
+    if (textureName) textureNames.add(textureName);
+  }
+  if (bin.magnifyRecords.length) model.magnifyPower = bin.magnifyRecords[bin.magnifyRecords.length - 1];
+  model.warnings.push(...bin.warnings);
+  for (const material2 of bin.materials2) {
+    if (material2.reserved.some((value) => value !== 0)) model.warnings.push("MRGL_MATERIAL2 has non-zero reserved fields");
   }
   model.polygons = polygons;
   model.textureNames = [...textureNames];
@@ -335,68 +198,8 @@ function computeNormal(a, b, c) {
   return [nx / len, ny / len, nz / len];
 }
 
-function readMappedFace(reader, type, textureName, meshVertexCount, material = null, material2 = null, solidColor = 0) {
-  if (meshVertexCount < 1) return null;
-  const n = reader.readInt32();
-  if (n < 3 || n > MAX_CORNERS_PER_FACE || reader.remaining() < 16 + n * 12) return null;
-  reader.skip(16);
-  const vertexIndices = [], textureU = [], textureV = [];
-  for (let i = 0; i < n; i++) { vertexIndices.push(reader.readInt32()); textureU.push(reader.readInt32()); textureV.push(reader.readInt32()); }
-  if (!indicesValid(vertexIndices, meshVertexCount)) {
-    if (!indicesValidOneBased(vertexIndices, meshVertexCount)) return null;
-    for (let i = 0; i < vertexIndices.length; i++) vertexIndices[i]--;
-  }
-  return { type, textureName, vertexIndices, textureU, textureV, material, material2, solidColor };
-}
-
-function readUnmappedFace(reader, type, textureName, meshVertexCount, solidColor = 0) {
-  if (meshVertexCount < 1) return null;
-  const n = reader.readInt32();
-  if (n < 3 || n > MAX_CORNERS_PER_FACE || reader.remaining() < 16 + n * 4) return null;
-  reader.skip(16);
-  const vertexIndices = [];
-  for (let i = 0; i < n; i++) vertexIndices.push(reader.readInt32());
-  if (!indicesValid(vertexIndices, meshVertexCount)) {
-    if (!indicesValidOneBased(vertexIndices, meshVertexCount)) return null;
-    for (let i = 0; i < vertexIndices.length; i++) vertexIndices[i]--;
-  }
-  return { type, textureName, vertexIndices, textureU: new Array(n).fill(0), textureV: new Array(n).fill(0), solidColor };
-}
-
-function readMaterial(reader, id) {
-  const flags = reader.readInt32() >>> 0;
-  const reflectivity = fixed16(reader.readInt32());
-  const fresnelBias = fixed16(reader.readInt32());
-  const fresnelStrength = fixed16(reader.readInt32());
-  const baseAlpha = fixed16(reader.readInt32());
-  const specPower = fixed16(reader.readInt32());
-  const emissive = fixed16(reader.readInt32());
-  const tint = [fixed16(reader.readInt32()), fixed16(reader.readInt32()), fixed16(reader.readInt32())];
-  const foliage = reader.readInt32() >>> 0;
-  return {
-    id, flags, reflectivity, fresnelBias, fresnelStrength, baseAlpha, specPower, emissive, tint,
-    alphaRef: foliage & 0xffff,
-    translucency: foliage >>> 16
-  };
-}
-
-function readMaterial2(reader) {
-  const flags2 = reader.readInt32() >>> 0;
-  const normalStrength = fixed16(reader.readInt32());
-  const reserved = [];
-  for (let i = 0; i < 5; i++) reserved.push(reader.readInt32());
-  return {
-    flags2,
-    normalStrength: flags2 & MRGLMAT2_NORMALMAP ? normalStrength : 1,
-    reserved
-  };
-}
-
-function fixed16(value) { return value / 65536; }
-
-function indicesValid(indices, count) { return indices.every((i) => i >= 0 && i < count); }
-function indicesValidOneBased(indices, count) { return indices.every((i) => i - 1 >= 0 && i - 1 < count); }
 function upper(v) { return (v ?? "").trim().toUpperCase(); }
+
 function isTvFamilyOrigin(origin) { return origin === "TV" || origin === "F3" || origin === "TV/F3"; }
 
 function representativeColor(textureName) {

@@ -1,215 +1,68 @@
 /*
-  .SMF v2-v4, the static model format of 4x4 Evolution 1 and 2 ("C3DModel").
+  .SMF models for JSPod's model viewer, in the same convention bin-decoder.js uses so one
+  viewer draws both formats with one code path.
 
-    "C3DModel"
-    fileVersion
-    objectCount
-    if fileVersion >= 4: lodEnabled,lodSwitchHeight
-
-    repeat objectCount:
-        objectName
-        if fileVersion >= 2: visible
-        objectVersion
-        vertexCount,frameCount,faceCount,unknown0
-        ["v1"]                                        optional Evo 2 material marker
-        material0,material1,material2,transparent,reflective,textureName
-        if v1: bumpTextureName
-        repeat frameCount:
-            repeat vertexCount: x,y,z,nx,ny,nz,u,v
-        repeat faceCount: i0,i1,i2
-
-  Read as a counted state machine rather than by sniffing where the vertex block ends: a
-  vertex line and a face line are both just comma-separated numbers, and the counts are the
-  only thing that distinguishes them. Every count and every face index is validated.
-
-  Verified against all 118 models in the ASPEN, THEHILL, BAJBEACH and PEAK stock tracks -
-  115 v4, 2 v2, 1 v3 - every file consumed exactly to its trailing blank line. That corpus
-  covers the Evo 2 "v1" bump-material form, a genuine 30-frame animated group, and the v2/v3
-  files that carry no LOD header.
-
-  Output is emitted into the SAME convention bin-decoder.js uses, so one model viewer draws
-  both formats with one code path and no per-model branching. This mirrors JSTruckViewer's
-  src/worker/evo/smf-parser.js, which is the reference implementation for Evo models.
-
-  Evo is Y-up and .BIN is Z-up, so Y and Z are swapped here. The viewer then applies its own
-  (x, z, -y) transform to every model alike, and the two compose to (x, y, -z): Evo's Z is
-  negated on the way to the screen. That negation is not cosmetic. Getting it wrong leaves
-  the model a mirror image of itself, which reads as the texture being mirrored rather than
-  as the geometry being flipped, because a mirrored mesh still carries its own UVs.
-
-  The swap flips handedness, which is what the viewer wants: it draws meshes with BackSide
-  because .BIN geometry is wound inward, so leaving the .SMF winding untouched puts these
-  faces on the same side. Normals are negated for the same reason - BackSide compiles
-  FLIP_SIDED, which negates the vertex normal, so a normal handed over pointing inward comes
-  out of the shader pointing outward.
-
-  V is inverted here for the same reason the .BIN path inverts its own: Evo's V runs
-  top-down and the viewer uploads every texture with flipY, so the two cancel.
-
-  Faces are expanded to a triangle soup because that is the shape the .BIN path already
-  emits; the models are small enough that the duplication costs nothing.
+  Parsing is OpenPhotex's (parseSmf returns the model in Evo's own axes, as written). This
+  adapter reshapes frame 0: Evo is Y-up and .BIN is Z-up, so Y and Z are swapped, normals are
+  negated to suit the viewer's BackSide drawing, V is inverted to cancel the upload's flipY,
+  and faces are expanded to the triangle soup the .BIN path emits. See JSTruckViewer's
+  src/worker/evo/smf-parser.js for the reasoning behind each.
 */
+import { isSmfModel, parseSmf } from "../vendor/openphotex/index.js";
 
-const SMF_MAGIC = "C3DModel";
-const MAX_OBJECTS = 4096;
-const MAX_VERTICES = 1 << 20;
-const MAX_FACES = 1 << 20;
-
-/*
-  A reduced-detail group is its high-detail partner's name suffixed with "L":
-  OPAQUE/OPAQUEL, TRANSP/TRANSPL. Observed stock spellings are case variants of OPAQUE,
-  OPAQUEL, TRANSP, TRANSPI, TRANSPE and TRANSPL, so TRANSPI and TRANSPE are full-detail
-  groups and only the trailing L is significant.
-*/
-const LOD_GROUP_PATTERN = /^(opaque|transp)l$/i;
-
-/** True when these bytes begin a C3DModel, whatever the entry is called. */
-export function isSmfModel(bytes) {
-  if (!bytes || bytes.length < SMF_MAGIC.length) return false;
-  for (let i = 0; i < SMF_MAGIC.length; i++) {
-    if (bytes[i] !== SMF_MAGIC.charCodeAt(i)) return false;
-  }
-  return true;
-}
+export { isSmfModel };
 
 export function decodeSmfModel(bytes, modelName) {
-  const lines = new TextDecoder("latin1")
-    .decode(bytes)
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .split("\n");
-
-  let cursor = 0;
-  const warnings = [];
-  const next = () => (cursor < lines.length ? lines[cursor++].trim() : null);
-  const peek = () => (cursor < lines.length ? lines[cursor].trim() : null);
-
-  if (next() !== SMF_MAGIC) throw new Error(`${modelName}: not a C3DModel`);
-  const fileVersion = int(next());
-  if (!(fileVersion >= 1 && fileVersion <= 4)) {
-    throw new Error(`${modelName}: unsupported .SMF version ${fileVersion}`);
-  }
-  const objectCount = int(next());
-  if (!(objectCount >= 0 && objectCount <= MAX_OBJECTS)) {
-    throw new Error(`${modelName}: implausible object count ${objectCount}`);
-  }
-
-  let lodEnabled = false;
-  let lodSwitchHeight = 0;
-  if (fileVersion >= 4) {
-    const parts = (next() ?? "").split(",");
-    lodEnabled = (parts[0] ?? "").trim() !== "0";
-    lodSwitchHeight = float(parts[1]);
-  }
-
+  const smf = parseSmf(bytes, modelName);
   const meshes = [];
   const textureNames = [];
   const seenTextures = new Set();
   let totalVertices = 0;
   let totalPolygons = 0;
-
-  for (let o = 0; o < objectCount; o++) {
-    const groupName = next();
-    if (groupName === null) {
-      warnings.push(`ran out of lines at object ${o + 1} of ${objectCount}`);
-      break;
+  for (const group of smf.groups) {
+    const { positions: p, normals: n, uvs: t } = group.frames[0];
+    const faces = group.indices;
+    const positions = new Float32Array(faces.length * 3);
+    const normals = new Float32Array(faces.length * 3);
+    const uvs = new Float32Array(faces.length * 2);
+    for (let c = 0; c < faces.length; c++) {
+      const v = faces[c];
+      positions[c * 3] = p[v * 3]; positions[c * 3 + 1] = p[v * 3 + 2]; positions[c * 3 + 2] = p[v * 3 + 1];
+      normals[c * 3] = -n[v * 3]; normals[c * 3 + 1] = -n[v * 3 + 2]; normals[c * 3 + 2] = -n[v * 3 + 1];
+      uvs[c * 2] = t[v * 2]; uvs[c * 2 + 1] = 1 - t[v * 2 + 1];
     }
-    const visible = fileVersion >= 2 ? next() !== "0" : true;
-    const objectVersion = int(next());
-
-    const counts = (next() ?? "").split(",");
-    const vertexCount = int(counts[0]);
-    const frameCount = Math.max(1, int(counts[1]));
-    const faceCount = int(counts[2]);
-    const objectInfo = (counts[3] ?? "").trim();
-    if (!(vertexCount >= 0 && vertexCount <= MAX_VERTICES) || !(faceCount >= 0 && faceCount <= MAX_FACES)) {
-      throw new Error(`${modelName}: implausible counts in group "${groupName}" (${vertexCount} verts, ${faceCount} faces)`);
-    }
-
-    // The Evo 2 bump form announces itself with a bare "v1" line before the material.
-    const bumpForm = peek() === "v1";
-    if (bumpForm) next();
-
-    const material = (next() ?? "").split(",");
-    const textureName = (material[5] ?? "").trim();
-    const bumpTextureName = bumpForm ? (next() ?? "").replace(/"/g, "").trim() : null;
-
-    /*
-      Frame 0 is what gets drawn. Later frames are still read line by line so the cursor
-      stays aligned with the face block that follows; their position is counted, so skipping
-      them cannot desynchronise the walk.
-    */
-    const vx = new Float32Array(vertexCount * 3);
-    const vn = new Float32Array(vertexCount * 3);
-    const vt = new Float32Array(vertexCount * 2);
-    for (let f = 0; f < frameCount; f++) {
-      for (let v = 0; v < vertexCount; v++) {
-        const line = next();
-        if (line === null) throw new Error(`${modelName}: truncated vertex block in "${groupName}"`);
-        if (f !== 0) continue;
-        const p = line.split(",");
-        // Evo (x, y, z) -> viewer-convention (x, z, y); normals negated with it. See above.
-        vx[v * 3] = float(p[0]); vx[v * 3 + 1] = float(p[2]); vx[v * 3 + 2] = float(p[1]);
-        vn[v * 3] = -float(p[3]); vn[v * 3 + 1] = -float(p[5]); vn[v * 3 + 2] = -float(p[4]);
-        vt[v * 2] = float(p[6]); vt[v * 2 + 1] = 1 - float(p[7]);
-      }
-    }
-
-    const positions = new Float32Array(faceCount * 9);
-    const normals = new Float32Array(faceCount * 9);
-    const uvs = new Float32Array(faceCount * 6);
-    let triangles = 0;
-    for (let f = 0; f < faceCount; f++) {
-      const line = next();
-      if (line === null) throw new Error(`${modelName}: truncated face block in "${groupName}"`);
-      const parts = line.split(",");
-      const tri = [int(parts[0]), int(parts[1]), int(parts[2])];
-      if (tri.some((index) => index < 0 || index >= vertexCount)) {
-        warnings.push(`"${groupName}" face ${f} indexes outside its ${vertexCount} vertices`);
-        continue;
-      }
-      for (let c = 0; c < 3; c++) {
-        const src = tri[c];
-        const dst = triangles * 9 + c * 3;
-        positions[dst] = vx[src * 3]; positions[dst + 1] = vx[src * 3 + 1]; positions[dst + 2] = vx[src * 3 + 2];
-        normals[dst] = vn[src * 3]; normals[dst + 1] = vn[src * 3 + 1]; normals[dst + 2] = vn[src * 3 + 2];
-        uvs[triangles * 6 + c * 2] = vt[src * 2];
-        uvs[triangles * 6 + c * 2 + 1] = vt[src * 2 + 1];
-      }
-      triangles++;
-    }
-
+    const textureName = group.material.textureName;
     if (textureName && !seenTextures.has(textureName.toUpperCase())) {
       seenTextures.add(textureName.toUpperCase());
       textureNames.push(textureName.toUpperCase());
     }
-    totalVertices += vertexCount;
-    totalPolygons += triangles;
-
+    const bump = group.material.bumpTextureName === null ? null : group.material.bumpTextureName.replace(/"/g, "").trim();
+    totalVertices += group.vertexCount;
+    totalPolygons += faces.length / 3;
     meshes.push({
-      groupName,
-      visible,
-      objectVersion,
-      lod: LOD_GROUP_PATTERN.test(groupName),
+      groupName: group.name,
+      visible: group.visible,
+      objectVersion: group.objectVersion,
+      lod: group.lodGroup,
       textureName: textureName ? textureName.toUpperCase() : null,
-      bumpTextureName: bumpTextureName ? bumpTextureName.toUpperCase() || null : null,
-      // Material fields 3 and 4 are the transparency and reflectivity flags. Fields 0-2 are
-      // three scalars of unknown meaning; every stock model writes 1.0, 1.0, 32.0.
-      transparent: (material[3] ?? "0").trim() !== "0",
-      reflective: (material[4] ?? "0").trim() !== "0",
-      materialScalars: [float(material[0]), float(material[1]), float(material[2])],
-      objectInfo,
-      frameCount,
-      // A .SMF sheet is meant to be seen from both faces; its foliage, fences and banners
-      // are single-sided quads. The .BIN path's BackSide default would hide half of them.
+      bumpTextureName: bump ? bump.toUpperCase() || null : null,
+      // Material fields 3 and 4 are the transparency and reflectivity flags; fields 0-2 are
+      // three scalars whose meaning is not established.
+      transparent: group.material.transparent,
+      reflective: group.material.reflective,
+      materialScalars: [...group.material.scalars],
+      objectInfo: group.objectInfo,
+      frameCount: group.frameCount,
+      // A .SMF sheet is meant to be seen from both faces; its foliage, fences and banners are
+      // single-sided quads. The .BIN path's BackSide default would hide half of them.
       doubleSided: true,
       color: 0xbfbfbf,
       material: null,
       material2: null,
       solid: false,
-      positions: triangles === faceCount ? positions : positions.slice(0, triangles * 9),
-      normals: triangles === faceCount ? normals : normals.slice(0, triangles * 9),
-      uvs: triangles === faceCount ? uvs : uvs.slice(0, triangles * 6),
+      positions,
+      normals,
+      uvs,
     });
   }
 
@@ -217,7 +70,7 @@ export function decodeSmfModel(bytes, modelName) {
   // Dropping the reduced-detail groups must never empty a model: one that carries only a
   // low-detail or hidden group is still better drawn than reported as having no geometry.
   const withGeometry = meshes.filter((mesh) => mesh.positions.length > 0);
-
+  const { fileVersion, lodEnabled, lodSwitchHeight } = smf;
   return {
     name: modelName,
     format: fileVersion >= 4 && lodEnabled ? `SMF v${fileVersion} (LOD)` : `SMF v${fileVersion}`,
@@ -232,16 +85,6 @@ export function decodeSmfModel(bytes, modelName) {
     textureNames,
     meshes: drawable.length ? drawable : withGeometry,
     hiddenMeshCount: meshes.length - (drawable.length ? drawable.length : withGeometry.length),
-    warnings,
+    warnings: smf.warnings,
   };
-}
-
-function int(value) {
-  const parsed = Number.parseInt((value ?? "").trim(), 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function float(value) {
-  const parsed = Number.parseFloat((value ?? "").trim());
-  return Number.isFinite(parsed) ? parsed : 0;
 }

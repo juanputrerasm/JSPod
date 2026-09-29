@@ -18,12 +18,13 @@ JSPod opens POD, EPD, and ZIP archives without uploading their contents to a ser
 
 ## Features
 
-- **Local or remote archives** — open files from disk, a URL, or an autoload query parameter.
-- **Private client-side processing** — indexing, decoding, and preview generation happen in the browser.
-- **Archive navigation** — search and browse a collapsible directory tree with entry metadata.
-- **Asset previews** — inspect textures, palettes, 3D models, text, audio, and common web images.
-- **Modern MTM2 (Community Patch 3) support** — read extended POD1 directories, long BIN texture names, material records, PNG/TGA textures, and tangent-space normal maps.
-- **Extraction** — download a selected entry or export the archive contents as a ZIP.
+- **Local or remote archives**: open files from disk, a URL, or an autoload query parameter.
+- **Private client-side processing**: indexing, decoding, and preview generation happen in the browser.
+- **Archive navigation**: search and browse a collapsible directory tree with entry metadata.
+- **Asset previews**: inspect textures, palettes, 3D models, text, audio, and common web images.
+- **CART Precision Racing models**: preview high-detail `.CMD` cars with their RAW/ACT textures and selectable road or speedway aero packages.
+- **Modern MTM2 (Community Patch 3) support**: read long BIN texture names, material records, PNG/TGA textures, and tangent-space normal maps.
+- **Extraction**: download a selected entry or export the archive contents as a ZIP.
 
 ## Supported archive formats
 
@@ -42,6 +43,7 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 |---|---|
 | `.BIN`, `.LWO` | Interactive Three.js model viewer with orbit controls. An animated BIN opens on frame 1 with a bar naming every frame and where it resolves from; **Play** or the **A** key steps through them |
 | `.SMF` | 4x4 Evolution 1 and 2 models, in the same viewer |
+| `.CMD` | CART Precision Racing high-detail vehicle models, with alternate aero-package selection |
 | `.RAW` | Paletted or grayscale texture with automatic dimension detection and ACT palette selection |
 | `.ACT` | 256-color palette grid |
 | `.TIF` | 4x4 Evolution 2 palette-indexed TIFF, drawn over a checkerboard when it carries an opacity sample |
@@ -64,6 +66,8 @@ For early POD1 archives, JSPod also reads the hidden `.ACT` palette name stored 
 Palettes are ranked the same way in the RAW preview and the BIN texture fallback: the entry's own same-name `.ACT` and the name recorded in the directory field first, then the archive's own `METALCR2.ACT`, then its `VGA.ACT`, then the bundled palettes, greyscale, and every differently-named `.ACT` last. The archive's own METALCR2 outranks the bundled copy because METALCR2 is not one palette - CPR ships a different one from MTM1 and MTM2 - and a `VGA.ACT` in the pod means a flight game whose exact title cannot be told apart from here, so the pod's copy is the only safe pick. A differently-named `.ACT` is offered but never chosen automatically. The BIN selector supplies the fallback for textures that have no same-name `.ACT`, so same-name palettes belonging to other textures are listed there but never lead.
 
 `.SMF` is 4x4 Evolution's static model format, a text `C3DModel` covering versions 2 to 4 including Evo 2's `v1` bump materials. It opens in the same viewer, and is detected by its magic rather than its extension so a renamed entry still opens. Evo is Y-up where `.BIN` is Z-up, and Evo's texture V runs top-down where `.BIN`'s does not, so the decoder converts both into the `.BIN` convention as it reads and the viewer then treats every model alike. That conversion negates Evo's Z on the way to the screen; leaving it out renders the model as its own mirror image, which reads as the texture being mirrored because a mirrored mesh still carries its own UVs. Diffuse textures resolve `.PNG`, `.TGA`, `.TIF`, then `.RAW`; an Evo `.RAW` also picks up its same-stem `.OPA` opacity plane, which is a real gradient rather than a mask and so is merged into the alpha channel instead of being reduced to the MTM colour key. Reduced-detail LOD groups are hidden when a model carries its full-detail pair.
+
+`.CMD` is CART Precision Racing's text high-detail car model. JSPod positions its named parts, decodes fixed-point vertices, normals and UVs, and resolves the declared `.RAW` material with its same-stem `.ACT` palette. Stock cars carry road/street-course and speedway/oval wings in the same file, so the preview offers an aero-package selector and draws only one set at a time. See [CPR CMD format](docs/CPR_CMD_FORMAT.md).
 
 In the interactive BIN preview, use the Left and Right Arrow keys to strafe the camera.
 
@@ -114,7 +118,7 @@ Relative archive paths are resolved against the viewer page. When both parameter
 | ES modules | Application, preview, and user-interface code |
 | Module Web Worker | POD indexing, entry reads, and asset decoding off the main thread |
 | OPFS | Temporary per-session archive storage |
-| Three.js r169 | BIN/LWO rendering and camera controls |
+| Three.js r169 | BIN/LWO, SMF, and CMD rendering and camera controls |
 | fflate 0.8.2 | ZIP import and export |
 | [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) | POD/EPD parsing and RAW/ACT/OPA decoding, vendored as plain ES modules in `src/vendor/openphotex/` |
 
@@ -126,7 +130,7 @@ src/
 ├── preview/                File-type preview modules
 ├── shared/                 Shared OPFS helpers
 ├── ui/                     File tree and dialog components
-├── worker/                 Archive, BIN, SMF, texture, and image decoders
+├── worker/                 Archive, BIN, SMF, CMD, texture, and image decoders
 ├── file-type-info.js       Extension metadata and preview routing
 └── zip-utils.js            ZIP archive handling
 ```
@@ -138,16 +142,19 @@ src/
 - Browser image decoding availability depends on the browser's worker APIs.
 - Rendering approximates the updated MTM2 material behavior in Three.js; it is not an exact copy of the game renderer.
 - 4x4 Evolution `.SMF` animation frames past the first are read but not played, and Evo 2's bump, gloss and cubic reflection material stages are not reproduced.
+- CPR `.CMD` part rotations are reported but not applied because their non-zero angle convention has not been established.
 
 ## Related projects
 
 - [JSTruckViewer](https://github.com/juanputrerasm/JSTruckViewer) — assembles and displays complete MTM2 trucks from TRK and POD data.
+- [JSTrackViewer](https://github.com/juanputrerasm/JSTrackViewer) browser-based POD archive track viewer.
 - [KPodman](https://github.com/juanputrerasm/KPodman) — desktop POD archive manager.
 
 ## Format documentation
 
 - [POD1 format](docs/POD1_FORMAT.md)
 - [BIN HD / Extended BIN](docs/BIN_HD_FORMAT.md)
+- [CART Precision Racing CMD format](docs/CPR_CMD_FORMAT.md)
 
 ## Credits and license
 

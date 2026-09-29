@@ -43,8 +43,8 @@ const FILE_TYPES = {
   BIN:  { description: "3D model (BIN mesh)",        icon: "📦" },
   LWO:  { description: "LightWave 3D object",        icon: "📦" },
   SMF:  { description: "3D model (4x4 Evo C3DModel)", icon: "📦" },
+  CMD:  { description: "CPR high-detail car model",  icon: "📦" },
   ANI:  { description: "Animated texture table",             icon: "📄" },
-  CMD:  { description: "CPR car data",             icon: "📄" },
 
   // Audio
   WAV:  { description: "Wave audio",                 icon: "🔊" },
@@ -90,7 +90,6 @@ const FILE_TYPES = {
   TEX:  { description: "Texture list (catalog)",               icon: "📄" },
   LOC:  { description: "Localization file",                  icon: "📝" },
   RGN:  { description: "CPR dialog data",               icon: "📄" },
-  CMD:  { description: "CPR car data",               icon: "📄" },
   200: { description: "320x200 cockpit data",               icon: "📄" },
   400: { description: "640x400 cockpit data",               icon: "📄" },
   480: { description: "640x480 cockpit data",               icon: "📄" },

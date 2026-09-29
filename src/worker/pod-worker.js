@@ -1,6 +1,7 @@
 import { indexPodFile, readPodEntryBytes } from "./pod-format.js";
 import { decodeBinModel } from "./bin-decoder.js";
 import { decodeSmfModel } from "./smf-decoder.js";
+import { decodeCprCmdModel } from "./cmd-decoder.js";
 import { decodeRawTexture, decodeActPalette, applyOpacityPlane } from "./texture-decoder.js";
 import { decodeTrueColorTexture } from "./image-decoder.js";
 import { decodeTiffTexture } from "./tiff-decoder.js";
@@ -31,6 +32,18 @@ const handlers = {
   async decodeSmf({ bytes, name }) {
     const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     const model = decodeSmfModel(uint8, name);
+    const transfers = [];
+    for (const mesh of model.meshes ?? []) {
+      if (mesh.positions) transfers.push(mesh.positions.buffer);
+      if (mesh.normals)   transfers.push(mesh.normals.buffer);
+      if (mesh.uvs)       transfers.push(mesh.uvs.buffer);
+    }
+    return [model, transfers];
+  },
+
+  async decodeCmd({ bytes, name }) {
+    const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const model = decodeCprCmdModel(new TextDecoder("windows-1252").decode(uint8), name);
     const transfers = [];
     for (const mesh of model.meshes ?? []) {
       if (mesh.positions) transfers.push(mesh.positions.buffer);

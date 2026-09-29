@@ -117,9 +117,12 @@ async function renderInto(container, bytes, context, animation) {
       It is detected by its "C3DModel" magic rather than by extension, so a mis-named entry
       still opens and a .BIN is never handed to the text parser.
     */
-    const decoded = isC3DModel(uint8)
-      ? await workerClient.call("decodeSmf", { bytes: uint8, name: entry.title })
-      : await workerClient.call("decodeBin", { bytes: uint8, name: entry.title, origin: "LEGACY" });
+    const extension = entry.title.toUpperCase().replace(/.*\./, "");
+    const decoded = extension === "CMD"
+      ? await workerClient.call("decodeCmd", { bytes: uint8, name: entry.title })
+      : isC3DModel(uint8)
+        ? await workerClient.call("decodeSmf", { bytes: uint8, name: entry.title })
+        : await workerClient.call("decodeBin", { bytes: uint8, name: entry.title, origin: "LEGACY" });
 
     // An animated BIN holds no geometry of its own, only the names of the models that
     // are its frames. C-POD opens on frame 1 and says so across the top of the
@@ -150,6 +153,31 @@ async function renderInto(container, bytes, context, animation) {
       ? "None of this animation's frames are in this archive; they resolve from another pod."
       : `Format: ${escapeHtml(models[0]?.format ?? "UNKNOWN")} — no renderable mesh data.`}</p>`;
     return;
+  }
+
+  // CPR CMD files contain both race-setup-dependent aero packages. Select one
+  // package for every CMD model in this preview rather than drawing both at once.
+  const cprWingModels = models.filter((candidate) => candidate?.wingPackages?.length > 1);
+  let activeWingPackage = cprWingModels[0]?.wingConfiguration ?? "road-course";
+  let wingSelect = null;
+  if (cprWingModels.length) {
+    const wingLabel = document.createElement("label");
+    wingLabel.className = "raw-ctrl-label";
+    wingLabel.textContent = "Wing package:";
+    wingSelect = document.createElement("select");
+    wingSelect.className = "raw-palette-select";
+    for (const [value, label] of [
+      ["road-course", "Road / street course"],
+      ["speedway", "Speedway / oval"]
+    ]) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      wingSelect.appendChild(option);
+    }
+    wingSelect.value = activeWingPackage;
+    wingLabel.appendChild(wingSelect);
+    toolbar.appendChild(wingLabel);
   }
 
   // ── Stats overlay ──────────────────────────────────────────────────────────
@@ -211,6 +239,14 @@ async function renderInto(container, bytes, context, animation) {
   smoothCheck.onchange = rebuild;
   lightCheck.onchange  = rebuild;
   lightSelect.onchange = rebuild;
+  if (wingSelect) {
+    wingSelect.onchange = () => {
+      activeWingPackage = wingSelect.value;
+      for (const cprModel of cprWingModels) cprModel.wingConfiguration = activeWingPackage;
+      statsEl.innerHTML = buildStatsHtml(models[frameIndex()], frameLabel(frameIndex()));
+      rebuild();
+    };
+  }
 
   // ── Three.js scene (rebuilt when toggles change) ───────────────────────────
   const LIGHT_POSITIONS = {
@@ -266,6 +302,7 @@ async function renderInto(container, bytes, context, animation) {
     for (let f = 0; f < models.length; f++) {
       const target = frameGroups[f];
       for (const meshData of models[f]?.meshes ?? []) {
+        if (meshData.wingPackage && meshData.wingPackage !== activeWingPackage) continue;
         const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
         const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
         const diffuseMap = (texBundle?.diffuse && texCheck.checked)
@@ -777,6 +814,10 @@ function buildStatsHtml(model, filename) {
     ["Textures", (model.textureNames ?? []).length],
     ["Meshes",   `${(model.meshes ?? []).length} (${transparentMeshes} transp, ${texturedMeshes} textured)`],
   ];
+  if (model.wingPackages?.length) {
+    const label = model.wingConfiguration === "speedway" ? "Speedway / oval" : "Road / street course";
+    rows.push(["Wings", escapeHtml(label)]);
+  }
   return rows.map(([k, v]) =>
     `<div class="bin-stat-row"><span class="bin-stat-key">${k}</span><span class="bin-stat-val">${v}</span></div>`
   ).join("");

@@ -1,7 +1,8 @@
 import { showModal } from "../ui/modal.js";
 import { detectDimensions, suggestDimensions } from "../worker/texture-decoder.js";
-import { normalizeArchiveName, basenameWithoutExtension } from "../shared/path-utils.js";
+import { basenameWithoutExtension } from "../shared/path-utils.js";
 import { PALETTES } from "../shared/bundled-palettes.js";
+import { paletteCandidates } from "../vendor/openphotex/index.js";
 
 let _savedPaletteLabel = null;
 
@@ -127,57 +128,46 @@ async function showDimensionPickerModal(byteCount, paletteOptions) {
 }
 
 // ─── Palette resolution chain ─────────────────────────────────────────────────
+// The ranking is OpenPhotex's paletteCandidates; with no origin it returns the picker list,
+// best first. This only labels the candidates for the dropdown.
+const BUNDLED_LABELS = {
+  metalcr2Mtm1: "METALCR2 (MTM1)",
+  metalcr2Cpr:  "METALCR2 (CPR)",
+  vgaHB:        "VGA (Hellbender)",
+  vgaTV:        "VGA (TV/F3)",
+};
+
 function buildPaletteOptions(entry, podIndex) {
-  const options   = [];
-  const baseName  = basenameWithoutExtension(entry.title);
-  const dirPrefix = normalizeArchiveName(entry.name).replace(/\/[^/]+$/, "");
-
-  const sameAct = podIndex.entries.find((e) => e.title.toUpperCase() === `${baseName}.ACT`);
-  if (sameAct) options.push({ label: `${sameAct.title} (same name)`, entry: sameAct });
-
-  const metadataName = entry.paletteName?.trim();
-  let metadataEntry = null;
-  if (metadataName?.toUpperCase().endsWith(".ACT")) {
-    const upperMetadataName = metadataName.toUpperCase();
-    metadataEntry = podIndex.entries.find((candidate) => candidate.title.toUpperCase() === upperMetadataName) ?? null;
-    const metadataOption = { label: `${metadataName} (POD metadata)` };
-    if (metadataEntry) {
-      metadataOption.entry = metadataEntry;
-    } else if (upperMetadataName === "METALCR2.ACT") {
-      metadataOption.bytes = PALETTES.metalcr2Mtm1;
-    } else {
-      metadataOption.unresolved = true;
-      metadataOption.label += " — not in archive";
-    }
-    options.push(metadataOption);
-  }
-
-  // The archive's own METALCR2 outranks the bundled copy, because METALCR2 is not one
-  // palette: CPR ships a different one from MTM1 and MTM2, so the copy the pod carries
-  // is the one known to match its art. A VGA.ACT says the pod belongs to one of the
-  // flight games, and nothing here tells Terminal Velocity from Fury3 or Hellbender,
-  // which is exactly why the pod's own copy is the only safe pick.
-  const archiveMetal = podIndex.entries.find((e) => e.title.toUpperCase() === "METALCR2.ACT") ?? null;
-  const archiveVga   = podIndex.entries.find((e) => e.title.toUpperCase() === "VGA.ACT") ?? null;
-  const ranked = [archiveMetal, archiveVga].filter((e) => e && e !== sameAct && e !== metadataEntry);
-  for (const e of ranked) options.push({ label: `Archive ${e.title}`, entry: e });
-
-  options.push({ label: "METALCR2 (MTM1)",  bytes: PALETTES.metalcr2Mtm1 });
-  options.push({ label: "METALCR2 (CPR)",   bytes: PALETTES.metalcr2Cpr });
-  options.push({ label: "VGA (Hellbender)", bytes: PALETTES.vgaHB });
-  options.push({ label: "VGA (TV/F3)",      bytes: PALETTES.vgaTV });
-  options.push({ label: "Greyscale",        greyscale: true });
-
-  // Differently-named palettes last, and never the automatic choice: picking whichever
-  // one happened to sit in the same folder was a coin toss dressed up as a rule.
-  for (const e of podIndex.entries) {
-    if (!e.title.toUpperCase().endsWith(".ACT")) continue;
-    const eDir = e.normalizedName.replace(/\/[^/]+$/, "");
-    if (eDir === dirPrefix && e !== sameAct && e !== metadataEntry && !ranked.includes(e)) {
-      options.push({ label: `${e.title} (same folder)`, entry: e });
+  const options = [];
+  for (const candidate of paletteCandidates(podIndex, { name: entry.name, entry })) {
+    switch (candidate.source) {
+      case "same-stem":
+        options.push({ label: `${candidate.entry.title} (same name)`, entry: candidate.entry });
+        break;
+      case "pod-metadata": {
+        const option = { label: `${candidate.name} (POD metadata)` };
+        if (candidate.entry) option.entry = candidate.entry;
+        else if (candidate.bundled) option.bytes = PALETTES[candidate.bundled];
+        else {
+          option.unresolved = true;
+          option.label += " — not in archive";
+        }
+        options.push(option);
+        break;
+      }
+      case "archive":
+        options.push({ label: `Archive ${candidate.entry.title}`, entry: candidate.entry });
+        break;
+      case "bundled":
+        options.push({ label: BUNDLED_LABELS[candidate.bundled], bytes: PALETTES[candidate.bundled] });
+        // Greyscale sits after the bundled palettes, before the same-folder guesses.
+        if (candidate.bundled === "vgaTV") options.push({ label: "Greyscale", greyscale: true });
+        break;
+      case "same-folder":
+        options.push({ label: `${candidate.entry.title} (same folder)`, entry: candidate.entry });
+        break;
     }
   }
-
   return options;
 }
 

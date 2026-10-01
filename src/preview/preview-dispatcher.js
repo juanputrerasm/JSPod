@@ -30,7 +30,7 @@ export async function dispatch(container, bytes, context) {
   const ext = (context.entry?.title ?? "").toUpperCase().replace(/.*\./, "");
   // bin-active removes container padding so the 3-D viewport can fill the full panel.
   // Must be toggled before rendering so the layout is already correct when the scene sizes itself.
-  container.classList.toggle("bin-active", ext === "BIN" || ext === "LWO" || ext === "SMF" || ext === "CMD");
+  container.classList.toggle("bin-active", ext === "BIN" || ext === "LWO" || ext === "SMF" || ext === "CMD" || ext === "DFM" || ext === "KFM");
 
   try {
     if (ext === "RAW" ) {
@@ -47,7 +47,7 @@ export async function dispatch(container, bytes, context) {
     }
     // .SMF and CPR .CMD use their own decoders but emit the same mesh shape as .BIN,
     // allowing all three formats to share the interactive model viewer.
-    if (ext === "BIN" || ext === "LWO" || ext === "SMF" || ext === "CMD") {
+    if (ext === "BIN" || ext === "LWO" || ext === "SMF" || ext === "CMD" || ext === "DFM" || ext === "KFM") {
       await renderBin(container, bytes, context);
       return;
     }

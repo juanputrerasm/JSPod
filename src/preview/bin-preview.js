@@ -17,6 +17,8 @@ let _savedPaletteLabel = null;
 let _animation      = null;
 let _frameTimer     = null;
 let _frameKeyHandler = null;
+let _nocturneEntryKey = null;
+let _nocturneSelection = freshNocturneSelection();
 
 // One second a frame, the rate the stock REX animation is documented to run at. It is
 // not read from the file: every header word in REX.BIN past the frame count and the
@@ -36,6 +38,12 @@ export function dispose() {
 
 export async function render(container, bytes, context) {
   dispose();
+  const entryName = context.entry?.normalizedName ?? context.entry?.title ?? "";
+  const entryKey = `${context.opfsPodPath ?? ""}\0${entryName}`;
+  if (entryKey !== _nocturneEntryKey) {
+    _nocturneEntryKey = entryKey;
+    _nocturneSelection = freshNocturneSelection();
+  }
   await renderInto(container, bytes, context, null);
 }
 
@@ -118,8 +126,12 @@ async function renderInto(container, bytes, context, animation) {
       still opens and a .BIN is never handed to the text parser.
     */
     const extension = entry.title.toUpperCase().replace(/.*\./, "");
-    const decoded = extension === "CMD"
-      ? await workerClient.call("decodeCmd", { bytes: uint8, name: entry.title })
+    const decoded = extension === "DFM"
+      ? await decodeDfm(uint8, context)
+      : extension === "KFM"
+        ? await workerClient.call("decodeKfm", { bytes: uint8, name: entry.title, frameIndex: _nocturneSelection.kfmFrameIndex })
+      : extension === "CMD"
+        ? await workerClient.call("decodeCmd", { bytes: uint8, name: entry.title })
       : isC3DModel(uint8)
         ? await workerClient.call("decodeSmf", { bytes: uint8, name: entry.title })
         : await workerClient.call("decodeBin", { bytes: uint8, name: entry.title, origin: "LEGACY" });
@@ -143,6 +155,10 @@ async function renderInto(container, bytes, context, animation) {
       return;
     }
     models = [decoded];
+  }
+
+  if (models[0]?.nocturne) {
+    installNocturneControls(toolbar, models[0].nocturne, () => rerenderNocturne(container, bytes, context));
   }
 
   const frameIndex = () => (animation ? animation.index : 0);
@@ -484,15 +500,122 @@ async function renderInto(container, bytes, context, animation) {
  * Where a frame model lives. Frames are stored as bare file names, so they are
  * looked up the way the game looks them up: MODELS first, then anywhere.
  */
-function findModelEntry(podIndex, name) {
+function findModelEntry(podIndex, name, defaultExtension = "BIN") {
   const target = String(name ?? "").replace(/\\/g, "/").trim().toUpperCase();
   if (!target) return null;
-  const withExt = target.includes(".") ? target : `${target}.BIN`;
+  const withExt = target.includes(".") ? target : `${target}.${defaultExtension}`;
   for (const path of [`MODELS/${withExt}`, `ART/${withExt}`, `DATA/${withExt}`, withExt]) {
     const hit = podIndex.entries.find((e) => e.normalizedName === path);
     if (hit) return hit;
   }
   return podIndex.entries.find((e) => e.title.toUpperCase() === withExt) ?? null;
+}
+
+async function decodeDfm(bytes, context) {
+  const { entry, podIndex, workerClient, opfsPodPath } = context;
+  const { skeleton } = await workerClient.call("inspectDfm", { bytes, name: entry.title });
+  const skeletonEntry = findModelEntry(podIndex, skeleton, "SKL");
+  let skeletonBytes = null;
+  if (skeletonEntry) {
+    const result = await workerClient.call("readEntryBytes", { opfsPodPath, entry: skeletonEntry });
+    skeletonBytes = result.bytes instanceof Uint8Array ? result.bytes : new Uint8Array(result.bytes);
+  }
+  return workerClient.call("decodeDfm", {
+    bytes,
+    skeletonBytes,
+    name: entry.title,
+    lodIndex: _nocturneSelection.lodIndex,
+    frameIndex: _nocturneSelection.skeletonFrameIndex,
+  });
+}
+
+function freshNocturneSelection() {
+  return { lodIndex: 0, motionIndex: 0, skeletonFrameIndex: 0, kfmFrameIndex: 0 };
+}
+
+async function rerenderNocturne(container, bytes, context) {
+  _cleanupPrev?.();
+  _cleanupPrev = null;
+  await renderInto(container, bytes, context, null);
+}
+
+function installNocturneControls(toolbar, info, rerender) {
+  if (info.kind === "kfm") {
+    if (info.frameCount <= 1) return;
+    const frame = makeRangeControl("Morph frame", 0, info.frameCount - 1, info.frameIndex, (value) => {
+      _nocturneSelection.kfmFrameIndex = value;
+      void rerender();
+    });
+    toolbar.appendChild(frame);
+    return;
+  }
+  if (info.kind !== "dfm") return;
+
+  if (info.lods.length > 1) {
+    const label = document.createElement("label");
+    label.className = "raw-ctrl-label";
+    label.textContent = "LOD: ";
+    const select = document.createElement("select");
+    select.className = "raw-palette-select";
+    for (const lod of info.lods) {
+      const option = document.createElement("option");
+      option.value = String(lod.index);
+      option.textContent = `${lod.index + 1}: ${lod.vertexCount} vertices, ${lod.triangleCount} triangles${lod.shadowOnly ? " (shadow)" : ""}`;
+      select.appendChild(option);
+    }
+    select.value = String(info.lodIndex);
+    select.addEventListener("change", () => {
+      _nocturneSelection.lodIndex = Number(select.value);
+      void rerender();
+    });
+    label.appendChild(select);
+    toolbar.appendChild(label);
+  }
+
+  if (!info.motions.length) return;
+  const selectedMotionIndex = Math.max(0, Math.min(info.motions.length - 1, _nocturneSelection.motionIndex));
+  const motionLabel = document.createElement("label");
+  motionLabel.className = "raw-ctrl-label";
+  motionLabel.textContent = "Motion: ";
+  const motionSelect = document.createElement("select");
+  motionSelect.className = "raw-palette-select";
+  for (const motion of info.motions) {
+    const option = document.createElement("option");
+    option.value = String(motion.index);
+    option.textContent = `${motion.name} — ${motion.frameCount} @ ${motion.fps} fps`;
+    motionSelect.appendChild(option);
+  }
+  motionSelect.value = String(selectedMotionIndex);
+  motionSelect.addEventListener("change", () => {
+    const motion = info.motions[Number(motionSelect.value)];
+    _nocturneSelection.motionIndex = motion.index;
+    _nocturneSelection.skeletonFrameIndex = motion.frameStart;
+    void rerender();
+  });
+  motionLabel.appendChild(motionSelect);
+  toolbar.appendChild(motionLabel);
+
+  const motion = info.motions[selectedMotionIndex];
+  const relativeFrame = Math.max(0, Math.min(motion.frameCount - 1, info.frameIndex - motion.frameStart));
+  toolbar.appendChild(makeRangeControl("Motion frame", 0, Math.max(0, motion.frameCount - 1), relativeFrame, (value) => {
+    _nocturneSelection.skeletonFrameIndex = motion.frameStart + value;
+    void rerender();
+  }));
+}
+
+function makeRangeControl(title, min, max, value, onChange) {
+  const label = document.createElement("label");
+  label.className = "raw-ctrl-label";
+  const caption = document.createElement("span");
+  const updateCaption = (current) => { caption.textContent = `${title}: ${current + 1}/${max + 1} `; };
+  updateCaption(value);
+  const range = document.createElement("input");
+  range.type = "range";
+  range.min = String(min); range.max = String(max); range.step = "1"; range.value = String(value);
+  range.addEventListener("input", () => updateCaption(Number(range.value)));
+  range.addEventListener("change", () => onChange(Number(range.value)));
+  label.append(caption, range);
+  return label;
 }
 
 /** Reads and decodes one frame model, or a stand-in when the archive lacks it. */

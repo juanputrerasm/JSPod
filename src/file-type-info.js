@@ -44,6 +44,10 @@ const FILE_TYPES = {
   LWO:  { description: "LightWave 3D object",        icon: "📦" },
   SMF:  { description: "3D model (4x4 Evo C3DModel)", icon: "📦" },
   CMD:  { description: "CPR high-detail car model",  icon: "📦" },
+  DFM:  { description: "Nocturne deformable character model", icon: "📦" },
+  KFM:  { description: "Nocturne morph/prop model", icon: "📦" },
+  SKL:  { description: "Nocturne skeleton and animation bank", icon: "📄" },
+  CTH:  { description: "Nocturne cloth definition", icon: "📄" },
   ANI:  { description: "Animated texture table",             icon: "📄" },
 
   // Audio
@@ -79,6 +83,9 @@ const FILE_TYPES = {
   PIT:  { description: "Pit road data",              icon: "📄" },
   DVP:  { description: "Developer/debug data",       icon: "📄" },
   GLT:  { description: "Glow/light table",           icon: "📄" },
+  GEO:  { description: "Nocturne collision grid", icon: "🗺" },
+  THM:  { description: "Nocturne location thumbnails", icon: "🖼" },
+  ZTH:  { description: "Nocturne camera depth thumbnails", icon: "📄" },
 
   // Configuration / metadata
   INI:  { description: "Configuration file",         icon: "⚙️" },

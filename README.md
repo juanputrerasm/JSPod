@@ -23,6 +23,7 @@ JSPod opens POD, EPD, and ZIP archives without uploading their contents to a ser
 - **Archive navigation**: search and browse a collapsible directory tree with entry metadata.
 - **Asset previews**: inspect textures, palettes, 3D models, text, audio, and common web images.
 - **CART Precision Racing models**: preview high-detail `.CMD` cars with their RAW/ACT textures and selectable road or speedway aero packages.
+- **Nocturne models**: preview skeletal `.DFM` characters with their companion `.SKL`, and binary or text `.KFM` props and cloth meshes.
 - **Modern MTM2 (Community Patch 3) support**: read long BIN texture names, material records, PNG/TGA textures, and tangent-space normal maps.
 - **Extraction**: download a selected entry or export the archive contents as a ZIP.
 
@@ -44,6 +45,7 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 | `.BIN`, `.LWO` | Interactive Three.js model viewer with orbit controls. An animated BIN opens on frame 1 with a bar naming every frame and where it resolves from; **Play** or the **A** key steps through them |
 | `.SMF` | 4x4 Evolution 1 and 2 models, in the same viewer |
 | `.CMD` | CART Precision Racing high-detail vehicle models, with alternate aero-package selection |
+| `.DFM`, `.KFM` | Nocturne skeletal characters and morph/prop models, with their RAW/ACT textures |
 | `.RAW` | Paletted or grayscale texture with automatic dimension detection and ACT palette selection |
 | `.ACT` | 256-color palette grid |
 | `.TIF` | 4x4 Evolution 2 palette-indexed TIFF, drawn over a checkerboard when it carries an opacity sample |
@@ -68,6 +70,8 @@ Palettes are ranked the same way in the RAW preview and the BIN texture fallback
 `.SMF` is 4x4 Evolution's static model format, a text `C3DModel` covering versions 2 to 4 including Evo 2's `v1` bump materials. It opens in the same viewer, and is detected by its magic rather than its extension so a renamed entry still opens. Evo is Y-up where `.BIN` is Z-up, and Evo's texture V runs top-down where `.BIN`'s does not, so the decoder converts both into the `.BIN` convention as it reads and the viewer then treats every model alike. That conversion negates Evo's Z on the way to the screen; leaving it out renders the model as its own mirror image, which reads as the texture being mirrored because a mirrored mesh still carries its own UVs. Diffuse textures resolve `.PNG`, `.TGA`, `.TIF`, then `.RAW`; an Evo `.RAW` also picks up its same-stem `.OPA` opacity plane, which is a real gradient rather than a mask and so is merged into the alpha channel instead of being reduced to the MTM colour key. Reduced-detail LOD groups are hidden when a model carries its full-detail pair.
 
 `.CMD` is CART Precision Racing's text high-detail car model. JSPod positions its named parts, decodes fixed-point vertices, normals and UVs, and resolves the declared `.RAW` material with its same-stem `.ACT` palette. Stock cars carry road/street-course and speedway/oval wings in the same file, so the preview offers an aero-package selector and draws only one set at a time. See [CPR CMD format](docs/CPR_CMD_FORMAT.md).
+
+Nocturne `.DFM` characters resolve the skeleton named by the model from the same archive, evaluate SKL frames through the parented quaternion hierarchy, skin the selected LOD, and resolve the DFM texture set. The preview toolbar selects the DFM LOD, motion, and motion frame. `.KFM` props use the same viewer, support both binary v3–4 and text v5–8, and expose their morph frames with a slider.
 
 In the interactive BIN preview, use the Left and Right Arrow keys to strafe the camera.
 
@@ -118,7 +122,7 @@ Relative archive paths are resolved against the viewer page. When both parameter
 | ES modules | Application, preview, and user-interface code |
 | Module Web Worker | POD indexing, entry reads, and asset decoding off the main thread |
 | OPFS | Temporary per-session archive storage |
-| Three.js r169 | BIN/LWO, SMF, and CMD rendering and camera controls |
+| Three.js r169 | BIN/LWO, SMF, CMD, DFM, and KFM rendering and camera controls |
 | fflate 0.8.2 | ZIP import and export |
 | [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) | POD/EPD parsing and RAW/ACT/OPA decoding, vendored as plain ES modules in `src/vendor/openphotex/` |
 
@@ -130,7 +134,7 @@ src/
 ├── preview/                File-type preview modules
 ├── shared/                 Shared OPFS helpers
 ├── ui/                     File tree and dialog components
-├── worker/                 Archive, BIN, SMF, CMD, texture, and image decoders
+├── worker/                 Archive, BIN, SMF, CMD, Nocturne, texture, and image decoders
 ├── file-type-info.js       Extension metadata and preview routing
 └── zip-utils.js            ZIP archive handling
 ```
@@ -143,6 +147,7 @@ src/
 - Rendering approximates the updated MTM2 material behavior in Three.js; it is not an exact copy of the game renderer.
 - 4x4 Evolution `.SMF` animation frames past the first are read but not played, and Evo 2's bump, gloss and cubic reflection material stages are not reproduced.
 - CPR `.CMD` part rotations are reported but not applied because their non-zero angle convention has not been established.
+- Nocturne previews default to the highest-detail DFM LOD and first DFM/KFM frame. Other poses are selectable, but continuous animation playback is not implemented yet.
 
 ## Related projects
 

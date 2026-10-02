@@ -5,7 +5,7 @@ import { decodeCprCmdModel } from "./cmd-decoder.js";
 import { decodeRawTexture, decodeActPalette, applyOpacityPlane } from "./texture-decoder.js";
 import { decodeTrueColorTexture } from "./image-decoder.js";
 import { decodeTiffTexture } from "./tiff-decoder.js";
-import { decodeDfmModel, decodeKfmModel, inspectDfm } from "./nocturne-decoder.js";
+import { decodeDfmModel, decodeDfmMotionModel, decodeKfmModel, inspectDfm } from "./nocturne-decoder.js";
 
 const handlers = {
   async indexPod({ opfsPodPath }) {
@@ -76,6 +76,25 @@ const handlers = {
     const transfers = [];
     for (const mesh of model.meshes ?? []) transfers.push(mesh.positions.buffer, mesh.normals.buffer, mesh.uvs.buffer);
     return [model, transfers];
+  },
+
+  async decodeDfmMotion({ bytes, skeletonBytes, name, lodIndex, motionIndex, frameIndex }) {
+    const uint8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const skeleton = skeletonBytes ? (skeletonBytes instanceof Uint8Array ? skeletonBytes : new Uint8Array(skeletonBytes)) : null;
+    const model = decodeDfmMotionModel(uint8, skeleton, name, { lodIndex, motionIndex, frameIndex });
+    const transfers = new Set();
+    for (const mesh of model.meshes ?? []) {
+      transfers.add(mesh.positions.buffer);
+      transfers.add(mesh.normals.buffer);
+      transfers.add(mesh.uvs.buffer);
+    }
+    for (const frame of model.keyframes ?? []) {
+      for (const mesh of frame.meshes ?? []) {
+        transfers.add(mesh.positions.buffer);
+        transfers.add(mesh.normals.buffer);
+      }
+    }
+    return [model, [...transfers]];
   },
 
   async decodeRaw({ rawBytes, actBytes, opaBytes, name, width, height }) {

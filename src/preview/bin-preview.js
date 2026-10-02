@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { PALETTES } from "../shared/bundled-palettes.js";
+import { advancePlayback, keyframeMorphs, makePlayback, setKeyframeBlend, wrapFrame, writeSwappedLerp } from "./keyframe-animation.js";
 
 const MRGLMAT_BLEND = 0x0004;
 const MRGLMAT_ALPHATEST = 0x0008;
@@ -11,23 +12,20 @@ const MRGLMAT_ALPHAREF = 0x0800;
 
 let _cleanupPrev       = null;
 let _savedPaletteLabel = null;
-// Animation state lives outside the render pass because a frame change re-runs the
-// whole render, and the playing flag, the pending tick and the camera have to
-// survive it. One preview is open at a time, so one set of them is enough.
+let _savedViewState    = null;
+// Animated-BIN state lives outside the render pass so playback survives scene rebuilds.
+// One preview is open at a time, so one instance is enough.
 let _animation      = null;
-let _frameTimer     = null;
 let _frameKeyHandler = null;
 let _nocturneEntryKey = null;
 let _nocturneSelection = freshNocturneSelection();
 
-// One second a frame, the rate the stock REX animation is documented to run at. It is
-// not read from the file: every header word in REX.BIN past the frame count and the
-// magnify constant is zero, so there is no rate field there to read.
-const FRAME_MS = 1000;
+// JSTrackViewer holds each BIN keyframe for half a second while continuously blending
+// into the next one. Animated BIN headers do not carry a playback rate.
+const BIN_KEYFRAME_FPS = 2;
 
 export function dispose() {
   if (_animation) { _animation.playing = false; _animation = null; }
-  if (_frameTimer !== null) { clearTimeout(_frameTimer); _frameTimer = null; }
   if (_frameKeyHandler) {
     document.removeEventListener("keydown", _frameKeyHandler);
     _frameKeyHandler = null;
@@ -65,7 +63,7 @@ async function renderInto(container, bytes, context, animation) {
   const wireLabel   = makeToggle("Wireframe");
   const texLabel    = makeToggle("Textures", true);
   const gridLabel   = makeToggle("Grid", true);
-  const smoothLabel = makeToggle("Smooth");
+  const smoothLabel = makeToggle("Smooth", true);
   const lightLabel  = makeToggle("Lighting");
   const [wireCheck, texCheck, gridCheck, smoothCheck, lightCheck] =
     [wireLabel, texLabel, gridLabel, smoothLabel, lightLabel].map((l) => l.querySelector("input"));
@@ -149,7 +147,10 @@ async function renderInto(container, bytes, context, animation) {
           ? await decodeFrameModel(frame.entry, context)
           : { format: "MISSING", meshes: [], textureNames: [], warnings: [] });
       }
-      _animation = { frames, models: frameModels, index: 0, playing: false, showFrame: null };
+      _animation = Object.assign(makePlayback(frameModels.length, BIN_KEYFRAME_FPS), {
+        frames,
+        models: frameModels,
+      });
       installFrameKey(container, _animation);
       await renderInto(container, null, context, _animation);
       return;
@@ -157,12 +158,21 @@ async function renderInto(container, bytes, context, animation) {
     models = [decoded];
   }
 
+  const dfmAnimation = models[0]?.keyframeAnimation
+    ? makePlayback(models[0].keyframeAnimation.frameCount, models[0].keyframeAnimation.fps,
+        models[0].keyframeAnimation.initialIndex, true)
+    : null;
   if (models[0]?.nocturne) {
-    installNocturneControls(toolbar, models[0].nocturne, () => rerenderNocturne(container, bytes, context));
+    installNocturneControls(toolbar, models[0].nocturne,
+      () => rerenderNocturne(container, bytes, context), dfmAnimation);
   }
 
   const frameIndex = () => (animation ? animation.index : 0);
   const frameLabel = (index) => (animation ? animation.frames[index].name : entry.title);
+  const binKeyframes = animation ? keyframeMorphs(models[0], models) : null;
+  const animatedKeyframes = binKeyframes ?? models[0]?.keyframes ?? null;
+  const gpuMorphs = !!binKeyframes;
+  const playback = animation ?? dfmAnimation;
 
   if (!models.some((candidate) => candidate?.meshes?.length)) {
     viewport.innerHTML = `<p class="preview-error">${animation
@@ -220,6 +230,8 @@ async function renderInto(container, bytes, context, animation) {
   const unresolvedFrames = (animation?.frames ?? []).filter((frame) => !frame.entry).map((frame) => frame.name);
   const allWarnings = [
     ...(model.warnings ?? []),
+    ...(animation && models.length > 1 && !binKeyframes
+      ? ["Animation frames differ in shape, so this BIN uses discrete frame changes."] : []),
     ...(missingTextures.length ? [`Missing textures: ${missingTextures.join(", ")}`] : []),
     ...(unresolvedFrames.length ? [`Animation frames outside this archive: ${unresolvedFrames.join(", ")}`] : []),
   ];
@@ -242,6 +254,8 @@ async function renderInto(container, bytes, context, animation) {
   let activeScene  = null;
   let cameraState  = null;
   let frameGroups  = [];
+  let morphMeshes  = [];
+  let dynamicGeometries = [];
   bgInput.addEventListener("input", () => {
     if (activeScene) activeScene.background = new THREE.Color(bgInput.value);
   });
@@ -300,24 +314,28 @@ async function renderInto(container, bytes, context, animation) {
       scene.add(ambient, directional);
     }
 
-    // One group per frame, all built up front and all but the current one hidden.
-    // Swapping frames is then a visibility flag: no geometry rebuild, no new grid, and
-    // the camera never moves.
+    // Compatible animated BINs use GPU morph targets. Looping DFMs stream adjacent poses
+    // through dynamic buffers, while incompatible BIN frames retain the discrete fallback.
     const group = new THREE.Group();
     scene.add(group);
-    frameGroups = models.map((_, index) => {
+    const useKeyframes = animatedKeyframes?.length >= 2;
+    const renderModels = useKeyframes ? [models[0]] : models;
+    frameGroups = renderModels.map((_, index) => {
       const frameGroup = new THREE.Group();
-      frameGroup.visible = index === frameIndex();
+      frameGroup.visible = useKeyframes || index === frameIndex();
       group.add(frameGroup);
       return frameGroup;
     });
+    morphMeshes = [];
+    dynamicGeometries = [];
 
     const wireOn   = wireCheck.checked;
     const smoothOn = smoothCheck.checked;
     const lightOn  = lightCheck.checked;
-    for (let f = 0; f < models.length; f++) {
+    for (let f = 0; f < renderModels.length; f++) {
       const target = frameGroups[f];
-      for (const meshData of models[f]?.meshes ?? []) {
+      for (let meshIndex = 0; meshIndex < (renderModels[f]?.meshes?.length ?? 0); meshIndex++) {
+        const meshData = renderModels[f].meshes[meshIndex];
         if (meshData.wingPackage && meshData.wingPackage !== activeWingPackage) continue;
         const texBundle  = textureMap.get(normalizeTextureStem(meshData.textureName));
         const needsAlpha = !!meshData.transparent || !!(meshData.material?.flags & (0x0004 | 0x0008 | 0x2000));
@@ -335,6 +353,16 @@ async function renderInto(container, bytes, context, animation) {
           geometry.setAttribute("uv", new THREE.Float32BufferAttribute(
             buildDisplayUvs(meshData.uvs, diffuseMap), 2));
         }
+        if (gpuMorphs) {
+          geometry.morphAttributes.position = animatedKeyframes.slice(1).map((frame) =>
+            new THREE.Float32BufferAttribute(swapYZ(frame.meshes[meshIndex].positions), 3));
+          geometry.morphAttributes.normal = animatedKeyframes.slice(1).map((frame) =>
+            new THREE.Float32BufferAttribute(swapYZ(frame.meshes[meshIndex].normals), 3));
+        } else if (useKeyframes) {
+          geometry.getAttribute("position").setUsage(THREE.DynamicDrawUsage);
+          geometry.getAttribute("normal").setUsage(THREE.DynamicDrawUsage);
+          dynamicGeometries.push({ geometry, meshIndex });
+        }
         geometry.computeBoundingSphere();
 
         // Whether the resolved art actually carries alpha is only known here, once the
@@ -344,7 +372,10 @@ async function renderInto(container, bytes, context, animation) {
           ? { ...meshData, textureHasAlpha: true }
           : meshData;
         const material = createPreviewMaterial(withAlphaFlag, diffuseMap, normalMap, lightOn, wireOn);
-        target.add(new THREE.Mesh(geometry, material));
+        const solid = new THREE.Mesh(geometry, material);
+        if (useKeyframes) solid.frustumCulled = false;
+        target.add(solid);
+        if (gpuMorphs) morphMeshes.push(solid);
         if (meshData.material?.flags & 0x2000) {
           const solidPass = createPreviewMaterial({
             ...meshData,
@@ -353,15 +384,26 @@ async function renderInto(container, bytes, context, animation) {
           solidPass.depthWrite = true;
           solidPass.polygonOffset = true;
           solidPass.polygonOffsetFactor = -1;
-          target.add(new THREE.Mesh(geometry, solidPass));
+          const secondPass = new THREE.Mesh(geometry, solidPass);
+          if (useKeyframes) secondPass.frustumCulled = false;
+          target.add(secondPass);
+          if (gpuMorphs) morphMeshes.push(secondPass);
         }
 
         // Wireframe overlay on textured geometry — yellow lines, no transparency.
         if (wireOn && diffuseMap) {
-          target.add(new THREE.LineSegments(
-            new THREE.WireframeGeometry(geometry),
-            new THREE.LineBasicMaterial({ color: 0xffff00 })
-          ));
+          if (useKeyframes) {
+            const wireMesh = new THREE.Mesh(geometry,
+              new THREE.MeshBasicMaterial({ color: 0xffff00, wireframe: true }));
+            wireMesh.frustumCulled = false;
+            target.add(wireMesh);
+            if (gpuMorphs) morphMeshes.push(wireMesh);
+          } else {
+            target.add(new THREE.LineSegments(
+              new THREE.WireframeGeometry(geometry),
+              new THREE.LineBasicMaterial({ color: 0xffff00 })
+            ));
+          }
         }
       }
     }
@@ -371,7 +413,8 @@ async function renderInto(container, bytes, context, animation) {
     // frames are made visible for the measurement and hidden again after it.
     for (const frameGroup of frameGroups) frameGroup.visible = true;
     const box    = new THREE.Box3().setFromObject(group);
-    frameGroups.forEach((frameGroup, index) => { frameGroup.visible = index === frameIndex(); });
+    if (useKeyframes) expandBoxByKeyframes(box, animatedKeyframes);
+    frameGroups.forEach((frameGroup, index) => { frameGroup.visible = useKeyframes || index === frameIndex(); });
     const center = box.getCenter(new THREE.Vector3());
     const size   = box.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z) || 1;
@@ -388,6 +431,9 @@ async function renderInto(container, bytes, context, animation) {
     if (cameraState) {
       camera.position.copy(cameraState.position);
       controls.target.copy(cameraState.target);
+    } else if (_savedViewState) {
+      camera.position.copy(center).addScaledVector(_savedViewState.positionOffset, maxDim);
+      controls.target.copy(center).addScaledVector(_savedViewState.targetOffset, maxDim);
     } else {
       camera.position.set(center.x, center.y + maxDim * 0.5, center.z + maxDim * 1.5);
       controls.target.copy(center);
@@ -397,9 +443,41 @@ async function renderInto(container, bytes, context, animation) {
     camera.updateProjectionMatrix();
     controls.update();
 
+    const updateDisplayedFrame = (from, to = from, blend = 0) => {
+      const oldIndex = playback?.index;
+      if (playback) playback.index = from;
+      if (morphMeshes.length) {
+        for (const mesh of morphMeshes) setKeyframeBlend(mesh.morphTargetInfluences, from, to, blend);
+      } else if (dynamicGeometries.length) {
+        updateDynamicKeyframes(dynamicGeometries, animatedKeyframes, from, to, blend);
+      } else if (animation) {
+        frameGroups.forEach((frameGroup, index) => { frameGroup.visible = index === from; });
+      }
+      if (animation && oldIndex !== from) {
+        statsEl.innerHTML = buildStatsHtml(models[from], frameLabel(from));
+      }
+      if (oldIndex !== from) playback?.updateBar?.();
+    };
+    if (playback) {
+      playback.applyPose = updateDisplayedFrame;
+      playback.showFrame = (index) => {
+        const wrapped = wrapFrame(index, playback.frameCount);
+        playback.phase = wrapped;
+        playback.lastTime = null;
+        updateDisplayedFrame(wrapped);
+        playback.updateBar?.();
+      };
+      playback.showFrame(playback.index);
+    }
+
     let animId;
-    const loop = () => { animId = requestAnimationFrame(loop); controls.update(); renderer.render(scene, camera); };
-    loop();
+    const loop = (time) => {
+      animId = requestAnimationFrame(loop);
+      advancePlayback(playback, time);
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    animId = requestAnimationFrame(loop);
 
     const ro = new ResizeObserver(() => {
       const w = viewport.clientWidth, h = viewport.clientHeight;
@@ -412,6 +490,7 @@ async function renderInto(container, bytes, context, animation) {
 
     resetBtn.onclick   = () => {
       cameraState = null;
+      _savedViewState = null;
       camera.position.set(center.x, center.y + maxDim * 0.5, center.z + maxDim * 1.5);
       controls.target.copy(center);
       controls.update();
@@ -420,6 +499,11 @@ async function renderInto(container, bytes, context, animation) {
 
     return () => {
       cameraState = { position: camera.position.clone(), target: controls.target.clone() };
+      _savedViewState = {
+        positionOffset: camera.position.clone().sub(center).divideScalar(maxDim),
+        targetOffset: controls.target.clone().sub(center).divideScalar(maxDim),
+      };
+      if (playback) playback.applyPose = null;
       activeScene = null;
       cancelAnimationFrame(animId);
       ro.disconnect();
@@ -435,22 +519,12 @@ async function renderInto(container, bytes, context, animation) {
         child.material?.dispose();
       }
       frameGroups = [];
+      morphMeshes = [];
+      dynamicGeometries = [];
     };
   }
 
   _cleanupPrev = await buildScene();
-
-  if (animation) {
-    // The only work a frame change does: flip which group is visible and retitle the
-    // overlay. The scene, its textures, the grid and the camera all stay as they are.
-    animation.showFrame = (index) => {
-      const count = models.length;
-      animation.index = ((index % count) + count) % count;
-      frameGroups.forEach((frameGroup, i) => { frameGroup.visible = i === animation.index; });
-      statsEl.innerHTML = buildStatsHtml(models[animation.index], frameLabel(animation.index));
-      animation.updateBar?.();
-    };
-  }
 
   // ── Default palette selector (textures with no same-name ACT) ─────────────
   if (usedFallback.length > 0) {
@@ -479,22 +553,38 @@ async function renderInto(container, bytes, context, animation) {
       _cleanupPrev?.(); _cleanupPrev = null;
       _cleanupPrev = await buildScene();
 
-  if (animation) {
-    // The only work a frame change does: flip which group is visible and retitle the
-    // overlay. The scene, its textures, the grid and the camera all stay as they are.
-    animation.showFrame = (index) => {
-      const count = models.length;
-      animation.index = ((index % count) + count) % count;
-      frameGroups.forEach((frameGroup, i) => { frameGroup.visible = i === animation.index; });
-      statsEl.innerHTML = buildStatsHtml(models[animation.index], frameLabel(animation.index));
-      animation.updateBar?.();
-    };
-  }
     });
   }
 }
 
 // ─── Animated BIN frames ──────────────────────────────────────────────────────
+
+function expandBoxByKeyframes(box, keyframes) {
+  const point = new THREE.Vector3();
+  for (const frame of keyframes) {
+    for (const mesh of frame.meshes) {
+      const positions = mesh.positions;
+      for (let i = 0; i < positions.length; i += 3) {
+        point.set(positions[i], positions[i + 2], -positions[i + 1]);
+        box.expandByPoint(point);
+      }
+    }
+  }
+}
+
+function updateDynamicKeyframes(targets, keyframes, from, to, amount) {
+  const inverse = 1 - amount;
+  for (const { geometry, meshIndex } of targets) {
+    const a = keyframes[from].meshes[meshIndex];
+    const b = keyframes[to].meshes[meshIndex];
+    const position = geometry.getAttribute("position");
+    const normal = geometry.getAttribute("normal");
+    writeSwappedLerp(position.array, a.positions, b.positions, inverse, amount);
+    writeSwappedLerp(normal.array, a.normals, b.normals, inverse, amount);
+    position.needsUpdate = true;
+    normal.needsUpdate = true;
+  }
+}
 
 /**
  * Where a frame model lives. Frames are stored as bare file names, so they are
@@ -520,17 +610,18 @@ async function decodeDfm(bytes, context) {
     const result = await workerClient.call("readEntryBytes", { opfsPodPath, entry: skeletonEntry });
     skeletonBytes = result.bytes instanceof Uint8Array ? result.bytes : new Uint8Array(result.bytes);
   }
-  return workerClient.call("decodeDfm", {
+  return workerClient.call(_nocturneSelection.autoLoop ? "decodeDfmMotion" : "decodeDfm", {
     bytes,
     skeletonBytes,
     name: entry.title,
     lodIndex: _nocturneSelection.lodIndex,
+    motionIndex: _nocturneSelection.motionIndex,
     frameIndex: _nocturneSelection.skeletonFrameIndex,
   });
 }
 
 function freshNocturneSelection() {
-  return { lodIndex: 0, motionIndex: 0, skeletonFrameIndex: 0, kfmFrameIndex: 0 };
+  return { lodIndex: 0, motionIndex: 0, skeletonFrameIndex: 0, kfmFrameIndex: 0, autoLoop: false };
 }
 
 async function rerenderNocturne(container, bytes, context) {
@@ -539,7 +630,7 @@ async function rerenderNocturne(container, bytes, context) {
   await renderInto(container, bytes, context, null);
 }
 
-function installNocturneControls(toolbar, info, rerender) {
+function installNocturneControls(toolbar, info, rerender, playback = null) {
   if (info.kind === "kfm") {
     if (info.frameCount <= 1) return;
     const frame = makeRangeControl("Morph frame", 0, info.frameCount - 1, info.frameIndex, (value) => {
@@ -550,6 +641,13 @@ function installNocturneControls(toolbar, info, rerender) {
     return;
   }
   if (info.kind !== "dfm") return;
+
+  const loopLabel = makeToggle("Loop motion", _nocturneSelection.autoLoop);
+  loopLabel.querySelector("input").addEventListener("change", (event) => {
+    _nocturneSelection.autoLoop = event.target.checked;
+    void rerender();
+  });
+  toolbar.appendChild(loopLabel);
 
   if (info.lods.length > 1) {
     const label = document.createElement("label");
@@ -597,10 +695,22 @@ function installNocturneControls(toolbar, info, rerender) {
 
   const motion = info.motions[selectedMotionIndex];
   const relativeFrame = Math.max(0, Math.min(motion.frameCount - 1, info.frameIndex - motion.frameStart));
-  toolbar.appendChild(makeRangeControl("Motion frame", 0, Math.max(0, motion.frameCount - 1), relativeFrame, (value) => {
+  const frameControl = makeRangeControl("Motion frame", 0, Math.max(0, motion.frameCount - 1), relativeFrame, (value) => {
     _nocturneSelection.skeletonFrameIndex = motion.frameStart + value;
-    void rerender();
-  }));
+    if (playback) {
+      playback.index = value;
+      playback.phase = value;
+      playback.showFrame?.(value);
+    } else void rerender();
+  });
+  toolbar.appendChild(frameControl);
+  if (playback) {
+    playback.updateBar = () => {
+      _nocturneSelection.skeletonFrameIndex = motion.frameStart + playback.index;
+      frameControl.setRangeValue(playback.index);
+    };
+    playback.updateBar();
+  }
 }
 
 function makeRangeControl(title, min, max, value, onChange) {
@@ -615,6 +725,10 @@ function makeRangeControl(title, min, max, value, onChange) {
   range.addEventListener("input", () => updateCaption(Number(range.value)));
   range.addEventListener("change", () => onChange(Number(range.value)));
   label.append(caption, range);
+  label.setRangeValue = (current) => {
+    range.value = String(current);
+    updateCaption(current);
+  };
   return label;
 }
 
@@ -632,20 +746,14 @@ async function decodeFrameModel(entry, context) {
 function togglePlayback(animation) {
   if (animation.playing) {
     animation.playing = false;
-    if (_frameTimer !== null) { clearTimeout(_frameTimer); _frameTimer = null; }
+    animation.showFrame?.(animation.index);
     animation.updateBar?.();
     return;
   }
   animation.playing = true;
+  animation.phase = animation.index;
+  animation.lastTime = null;
   animation.updateBar?.();
-  // Chained timeouts rather than an interval, so a stalled tab resumes at one frame a
-  // second instead of firing every missed frame at once.
-  const step = () => {
-    if (!animation.playing) return;
-    animation.showFrame?.(animation.index + 1);
-    _frameTimer = setTimeout(step, FRAME_MS);
-  };
-  _frameTimer = setTimeout(step, FRAME_MS);
 }
 
 function installFrameKey(container, animation) {
@@ -1040,11 +1148,7 @@ function isC3DModel(bytes) {
 function swapYZ(arr) {
   if (!arr) return [];
   const out = new Float32Array(arr.length);
-  for (let i = 0; i < arr.length; i += 3) {
-    out[i]     =  arr[i];
-    out[i + 1] =  arr[i + 2];
-    out[i + 2] = -arr[i + 1];
-  }
+  writeSwappedLerp(out, arr, arr, 1, 0);
   return out;
 }
 

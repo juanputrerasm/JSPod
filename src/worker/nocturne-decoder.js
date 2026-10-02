@@ -21,6 +21,48 @@ export function decodeDfmModel(dfmBytes, sklBytes, modelName, options = {}) {
   if (skl.boneCount !== dfm.boneCount) return emptyDfm(dfm, modelName, `DFM has ${dfm.boneCount} bones but ${dfm.skeleton} has ${skl.boneCount}.`);
   const lodIndex = clampIndex(options.lodIndex, dfm.lods.length);
   const frameIndex = clampIndex(options.frameIndex, skl.frameCount);
+  return decodeDfmPose(dfm, skl, modelName, lodIndex, frameIndex);
+}
+
+export function decodeDfmMotionModel(dfmBytes, sklBytes, modelName, options = {}) {
+  const dfm = parseDfm(dfmBytes, modelName);
+  if (!sklBytes) return emptyDfm(dfm, modelName, `Skeleton ${dfm.skeleton} is not in this archive.`);
+  const skl = parseSkl(sklBytes, dfm.skeleton);
+  if (skl.boneCount !== dfm.boneCount) return emptyDfm(dfm, modelName, `DFM has ${dfm.boneCount} bones but ${dfm.skeleton} has ${skl.boneCount}.`);
+  const lodIndex = clampIndex(options.lodIndex, dfm.lods.length);
+  const motionIndex = clampIndex(options.motionIndex, skl.motions.length);
+  const motion = skl.motions[motionIndex];
+  if (!motion || motion.frameCount < 2) {
+    return decodeDfmPose(dfm, skl, modelName, lodIndex, motion?.frameStart ?? options.frameIndex ?? 0);
+  }
+
+  const frameStart = clampIndex(motion.frameStart, skl.frameCount);
+  const frameCount = Math.min(motion.frameCount, skl.frameCount - frameStart);
+  if (frameCount < 2) return decodeDfmPose(dfm, skl, modelName, lodIndex, frameStart);
+  const base = decodeDfmPose(dfm, skl, modelName, lodIndex, frameStart);
+  const keyframes = [];
+  for (let relative = 0; relative < frameCount; relative++) {
+    const pose = relative === 0
+      ? base
+      : decodeDfmPose(dfm, skl, modelName, lodIndex, frameStart + relative);
+    keyframes.push(alignPoseToBase(base, pose));
+  }
+  base.keyframes = keyframes;
+  base.keyframeAnimation = {
+    kind: "dfm",
+    fps: Number.isFinite(motion.fps) && motion.fps > 0 ? motion.fps : 30,
+    frameStart,
+    frameCount,
+    initialIndex: Math.max(0, Math.min(frameCount - 1, (options.frameIndex ?? frameStart) - frameStart)),
+  };
+  base.warnings = [
+    `Showing LOD ${lodIndex + 1} of ${dfm.lods.length}.`,
+    `Looping ${motion.name} at ${base.keyframeAnimation.fps} fps.`,
+  ];
+  return base;
+}
+
+function decodeDfmPose(dfm, skl, modelName, lodIndex, frameIndex) {
   const rotationBase = frameIndex * dfm.boneCount * 4;
   const globalPositions = new Array(dfm.boneCount), globalRotations = new Array(dfm.boneCount);
   for (let bone = 0; bone < dfm.boneCount; bone++) {
@@ -89,6 +131,23 @@ export function decodeDfmModel(dfmBytes, sklBytes, modelName, options = {}) {
       lods: dfm.lods.map((item, index) => ({ index, vertexCount: item.vertexCount, triangleCount: item.triangles.length, pixelHeight: item.pixelHeight, shadowOnly: item.shadowOnly })),
       motions: skl.motions.map((motion, index) => ({ index, name: motion.name, fps: motion.fps, frameStart: motion.frameStart, frameCount: motion.frameCount })),
     },
+  };
+}
+
+function alignPoseToBase(base, pose) {
+  const dx = pose.anchor.x - base.anchor.x;
+  const dy = pose.anchor.y - base.anchor.y;
+  const dz = pose.anchor.z - base.anchor.z;
+  return {
+    meshes: pose.meshes.map((mesh) => {
+      const positions = new Float32Array(mesh.positions.length);
+      for (let i = 0; i < positions.length; i += 3) {
+        positions[i] = mesh.positions[i] + dx;
+        positions[i + 1] = mesh.positions[i + 1] + dy;
+        positions[i + 2] = mesh.positions[i + 2] + dz;
+      }
+      return { positions, normals: new Float32Array(mesh.normals) };
+    }),
   };
 }
 

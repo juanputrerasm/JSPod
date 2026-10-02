@@ -50,7 +50,7 @@ export { MTM2_PALETTE_WHITE_INDEX, MTM2_PALETTE_FIRST_AUTHORED, MTM2_PALETTE_AUT
 export { writeMtm2Sit, writeMtm2Lvl, writeTexList, writeEmptyList, emptyGroundBoxGrids, buildMtm2Lte, writeMtm2Trk, } from "./mtm/write.js";
 export { parseFlyTagged, flyTag, flyTags, parseFlyAngle } from "./fly/tagged.js";
 export { FLY_TILE_DEGREES, FLY_TILE_COLUMNS, FLY_EQUATOR_ROW, FLY_TILE_CELLS, FLY_QUADRANT_CELLS, flyRowLatitude, flyColumnLongitude, flyTileBounds, flyTileAt, parseFlyFolderName, flyFolderName, parseFlyTextureName, } from "./fly/globe.js";
-export { parseFlyScf, parseFlySceneryObjects } from "./fly/scenery.js";
+export { FLY_OBJECT_SNAP_TO_GROUND, parseFlyScf, parseFlySceneryObjects } from "./fly/scenery.js";
 export { FLY_ALT_SIDE, parseFlyAlt, parseFlyTex, parseFlyTyp, parseFlyRef, parseFlyAl2, parseFlyQuadrant, } from "./fly/quadrant.js";
 export { parseFlyBsp } from "./fly/bsp.js";
 export { parseDfm } from "./nocturne/dfm.js";
@@ -64,4 +64,4 @@ export { parseNocturneThm, NOCTURNE_THM_WIDTH, NOCTURNE_THM_HEIGHT, NOCTURNE_THM
 export { parseNocturneZth, NOCTURNE_ZTH_WIDTH, NOCTURNE_ZTH_HEIGHT, NOCTURNE_ZTH_MAP_BYTES } from "./nocturne/zth.js";
 export { PodFormatError } from "./errors.js";
 /** The library version, as published in package.json. */
-export const VERSION = "0.1.0";
+export const VERSION = "1.0.0";

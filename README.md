@@ -42,7 +42,7 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 
 | File types | Preview |
 |---|---|
-| `.BIN`, `.LWO` | Interactive Three.js model viewer with orbit controls. An animated BIN opens on frame 1 with a bar naming every frame and where it resolves from; **Play** or the **A** key steps through them |
+| `.BIN`, `.LWO` | Interactive Three.js model viewer with orbit controls. Compatible animated BIN frames blend smoothly; **Play** or the **A** key loops them |
 | `.SMF` | 4x4 Evolution 1 and 2 models, in the same viewer |
 | `.CMD` | CART Precision Racing high-detail vehicle models, with alternate aero-package selection |
 | `.DFM`, `.KFM` | Nocturne skeletal characters and morph/prop models, with their RAW/ACT textures |
@@ -71,9 +71,9 @@ Palettes are ranked the same way in the RAW preview and the BIN texture fallback
 
 `.CMD` is CART Precision Racing's text high-detail car model. JSPod positions its named parts, decodes fixed-point vertices, normals and UVs, and resolves the declared `.RAW` material with its same-stem `.ACT` palette. Stock cars carry road/street-course and speedway/oval wings in the same file, so the preview offers an aero-package selector and draws only one set at a time. See [CPR CMD format](docs/CPR_CMD_FORMAT.md).
 
-Nocturne `.DFM` characters resolve the skeleton named by the model from the same archive, evaluate SKL frames through the parented quaternion hierarchy, skin the selected LOD, and resolve the DFM texture set. The preview toolbar selects the DFM LOD, motion, and motion frame. `.KFM` props use the same viewer, support both binary v3–4 and text v5–8, and expose their morph frames with a slider.
+Nocturne `.DFM` characters resolve the skeleton named by the model from the same archive, evaluate SKL frames through the parented quaternion hierarchy, skin the selected LOD, and resolve the DFM texture set. The preview toolbar selects the DFM LOD, motion, and motion frame, and can continuously loop the selected motion at its declared frame rate. `.KFM` props use the same viewer, support both binary v3–4 and text v5–8, and expose their morph frames with a slider.
 
-In the interactive BIN preview, use the Left and Right Arrow keys to strafe the camera.
+Model textures use smooth filtering by default. The viewer preserves the current orbit, pan, and relative zoom while switching models or poses. Use the Left and Right Arrow keys to strafe the camera.
 
 ## Requirements
 
@@ -147,7 +147,7 @@ src/
 - Rendering approximates the updated MTM2 material behavior in Three.js; it is not an exact copy of the game renderer.
 - 4x4 Evolution `.SMF` animation frames past the first are read but not played, and Evo 2's bump, gloss and cubic reflection material stages are not reproduced.
 - CPR `.CMD` part rotations are reported but not applied because their non-zero angle convention has not been established.
-- Nocturne previews default to the highest-detail DFM LOD and first DFM/KFM frame. Other poses are selectable, but continuous animation playback is not implemented yet.
+- Nocturne previews default to the highest-detail DFM LOD and first DFM/KFM frame; select a DFM motion and enable **Loop motion** to play it.
 
 ## Related projects
 

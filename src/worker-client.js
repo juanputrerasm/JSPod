@@ -6,11 +6,16 @@ export class WorkerClient {
     this.worker.addEventListener("message", (event) => this.handleMessage(event.data));
   }
 
-  call(type, payload) {
+  /**
+   * @param {string} type
+   * @param {object} payload
+   * @param {{onProgress?: (message: string) => void, transfer?: Transferable[]}} [options]
+   */
+  call(type, payload, { onProgress, transfer = [] } = {}) {
     const id = this.nextId++;
-    this.worker.postMessage({ id, type, payload });
+    this.worker.postMessage({ id, type, payload }, transfer);
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject, onProgress });
     });
   }
 
@@ -25,6 +30,10 @@ export class WorkerClient {
   handleMessage(message) {
     const deferred = this.pending.get(message.id);
     if (!deferred) {
+      return;
+    }
+    if (message.progress !== undefined) {
+      deferred.onProgress?.(message.progress);
       return;
     }
     this.pending.delete(message.id);

@@ -23,10 +23,24 @@ export async function indexPodFile(opfsPodPath) {
   return { ...pod, format: FORMAT_NAMES[pod.format] };
 }
 
+/**
+ * An entry's bytes. Entries of the document being edited say where their bytes live
+ * (src/model/pod-document.js); a bare archive entry is read from `opfsPodPath`.
+ */
 export async function readPodEntryBytes(opfsPodPath, entry) {
-  const file = await readFile(opfsPodPath);
-  const buffer = await file.slice(entry.offset, entry.offset + entry.length).arrayBuffer();
+  const source = entry.source ?? { kind: "archive", path: opfsPodPath, offset: entry.offset, length: entry.length };
+  const file = await readFile(source.path);
+  if (source.kind === "blob") return new Uint8Array(await file.arrayBuffer());
+  const buffer = await file.slice(source.offset, source.offset + entry.length).arrayBuffer();
   return new Uint8Array(buffer);
+}
+
+/** The raw 80-byte comment field of a POD1 or POD2 (offset 4 or 8), or null for EPD. */
+export async function readRawComment(opfsPodPath, format) {
+  const at = format === "pod2" ? 8 : format === "pod1" ? 4 : -1;
+  if (at < 0) return null;
+  const file = await readFile(opfsPodPath);
+  return new Uint8Array(await file.slice(at, at + 80).arrayBuffer());
 }
 
 export function findEntry(podIndex, normalizedName) {

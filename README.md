@@ -6,9 +6,9 @@
 [![GitHub Pages](https://img.shields.io/badge/demo-GitHub%20Pages-222?logo=github)](https://juanputrerasm.github.io/JSPod/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
 
-**A browser-based archive explorer and asset viewer for Terminal Reality POD files.**
+**A browser-based editor for Terminal Reality POD archives.**
 
-JSPod opens POD, EPD, and ZIP archives without uploading their contents to a server. It presents the archive as a searchable file tree, previews common game assets, and can extract one file or repack the complete archive as ZIP.
+JSPod creates, edits and saves POD1 and POD2 archives, and opens EPD and ZIP archives, without uploading anything to a server. It has the feature set of the desktop tool KPod (add, replace, rename, move, remove, disable in game, extract, validate, POD2 audit history, response lists, reports, pod.ini mounting), plus undo/redo, a text-entry editor and image import, and it previews the game assets inside.
 
 **Live application:** [Open JSPod on GitHub Pages](https://juanputrerasm.github.io/JSPod/)
 
@@ -16,25 +16,46 @@ JSPod opens POD, EPD, and ZIP archives without uploading their contents to a ser
 
 ---
 
+## What's new in 2.0
+
+JSPod is now an archive editor, not only a viewer. It covers everything the desktop tool KPod does, in the browser:
+
+- Create archives, or edit existing ones: add files and folders, replace, rename, move, remove, and edit the comment.
+- Save as POD1 or POD2 (with checksums and audit history), in place or under a new name.
+- Undo and redo every change.
+- Edit text entries directly, and import PNG, BMP, JPG or TGA art as game textures.
+- Validate archives, build them from response lists, write `.inf`/`.lst` reports, and mount them in `pod.ini`.
+- A new list with Name, Size and Description columns, sorting, multi-select, drag and drop, right-click menus and a Find panel.
+- MOD music playback, opacity-plane previews, a full hex view, and Save as PNG for textures.
+
+See [docs/PARITY.md](docs/PARITY.md) for the full comparison with KPod.
+
 ## Features
 
-- **Local or remote archives**: open files from disk, a URL, or an autoload query parameter.
-- **Private client-side processing**: indexing, decoding, and preview generation happen in the browser.
-- **Archive navigation**: search and browse a collapsible directory tree with entry metadata.
+- **Archive authoring**: create a new archive, or open one and add files or whole folders, replace, rename, move, remove, create folders, and edit the comment. Every edit can be undone.
+- **Save as POD1 or POD2**: POD2 output carries CRC checksums, timestamps and the audit trail. Save in place, Save As, or download.
+- **Validation**: unsafe paths, duplicate names, name and comment limits, overlapping payloads and POD2 checksums.
+- **KPod tools**: Disable/Enable in Game, response lists (`.lst`/`.rsp`), `.inf` and `.lst` reports, POD2 audit history, Mount in pod.ini.
+- **Text editor and image import**: edit text entries in place; import PNG, BMP, JPG or TGA art as `.RAW` with its own `.ACT` or onto an existing palette.
+- **Local or remote archives**: open files from disk, drag and drop, a URL, or an autoload query parameter.
+- **Private client-side processing**: indexing, editing, decoding and saving happen in the browser.
+- **Archive navigation**: a tree list with Name, Size and Description columns, sorting, a quick filter and a Find panel.
 - **Asset previews**: inspect textures, palettes, 3D models, text, audio, and common web images.
 - **CART Precision Racing models**: preview high-detail `.CMD` cars with their RAW/ACT textures and selectable road or speedway aero packages.
 - **Nocturne models**: preview skeletal `.DFM` characters with their companion `.SKL`, and binary or text `.KFM` props and cloth meshes.
 - **Modern MTM2 (Community Patch 3) support**: read long BIN texture names, material records, PNG/TGA textures, and tangent-space normal maps.
-- **Extraction**: download a selected entry or export the archive contents as a ZIP.
+- **Extraction**: extract the selection or everything, with or without folders, into a folder or as a ZIP.
 
 ## Supported archive formats
 
-| Format | Description | Support |
+| Format | Games | Support |
 |---|---|---|
-| POD1 | Original Terminal Reality POD layout | Read |
-| POD2 | POD2 archive layout | Read |
-| EPD | Enhanced POD layout | Read |
+| POD1 | Monster Truck Madness 1 and 2, CART Precision Racing, Terminal Velocity, Fury3, Hellbender | Read and write |
+| POD2 | 4x4 Evolution 1 and 2 | Read and write, with CRCs, timestamps and audit trail |
+| EPD | Fly! | Read; save it as POD1 or POD2 |
 | ZIP | Loads the first POD contained in the ZIP | Read |
+
+Saving an archive that was opened unchanged reproduces it byte for byte: OpenPhotex rebuilds every stock POD1 directory and every stock 4x4 Evolution POD2 exactly.
 
 POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int32 size`, `int32 offset`, holding paths of up to 31 characters. A directory table that does not validate as 40-byte records is a malformed archive and is refused. See [POD1 format](docs/POD1_FORMAT.md).
 
@@ -52,6 +73,12 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 | `.PNG`, `.TGA`, `.BMP`, `.JPG`, `.JPEG`, `.GIF`, `.WEBP` | Image preview |
 | `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SIX`, `.SIY`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, `.VEG`, `.WAT`, and other text formats | Text preview |
 | `.WAV` | Audio player |
+| `.MOD` | ProTracker music, rendered by OpenPhotex and played with seek and time |
+| `.OPA` | Opacity plane, as greyscale |
+| `.CLR` | Shown like `.RAW` |
+| Anything else | Hex dump, paged 4 KB at a time, with a jump-to-offset box |
+
+Text entries have an **Edit** button. Image previews (`.RAW`, `.CLR`, `.OPA`, `.TIF`, `.TGA`) have **Save as PNG**; `.RAW` also has **Save as BMP**.
 
 CommPatch tracks and the disabled forms of tracks and trucks are described and
 previewed alongside the originals: `.SI2` is a track only newer engines see, `.TXV`
@@ -86,8 +113,9 @@ Model textures use smooth filtering by default. The viewer preserves the current
 ### Use the hosted application
 
 1. Open [JSPod on GitHub Pages](https://juanputrerasm.github.io/JSPod/).
-2. Choose **Open POD / EPD / ZIP**, or paste an archive URL and choose **Open from URL**.
-3. Select an entry in the file tree to preview or download it.
+2. **File > Open** (or drop a POD, EPD or ZIP on the page), **File > Open from URL**, or **File > New Archive**.
+3. Select entries in the list to preview them. Right-click for the entry commands, or use the **Entry** menu and the toolbar.
+4. **File > Save** writes the archive back; **Save As** picks POD1 or POD2 and a new name.
 
 > [!NOTE]
 > Remote archives must be served over HTTP or HTTPS. Cross-origin servers must also allow the browser request through CORS.
@@ -103,6 +131,44 @@ python3 -m http.server 8080
 ```
 
 Then open <http://localhost:8080/>. There is no build step and no package installation.
+
+## Editing
+
+All edits are made to a working copy; nothing reaches your file until you save.
+
+| Command | What it does |
+|---|---|
+| Add Files, Add Folder | Adds files into the selected folder (or the root). A folder keeps its own name. A file's modification time becomes its POD2 timestamp. Existing names can be replaced or skipped. Dropping files or folders on the list does the same, onto the folder they are dropped on. |
+| Create Folder | An empty folder, kept until it is filled or removed. POD archives store no empty folders, so one that is still empty is not saved. |
+| Replace with File | Swaps an entry's data, keeping its name and palette record. |
+| Rename, Move To Folder | A folder carries everything inside it. Dragging rows onto a folder moves them. |
+| Remove | Removes the selection; a folder removes everything inside it. |
+| Disable / Enable in Game | Renames `.TRK`/`.SIT`/`.SI2` to `.TRX`/`.SIX`/`.SIY` and back, so the game passes over a track or truck without it being deleted. |
+| Comment | The archive comment, at most 79 bytes. |
+| Save as | POD1 or POD2 for the next save. POD1 names hold 31 bytes; POD2 names hold 255. |
+| Undo, Redo | Every edit above, up to 200 steps, until the next save. |
+
+An edit that would make the archive invalid (an unsafe path, a duplicate name, a name too long for the output format, text the archive's 8-bit encoding cannot store) is refused with the reason. An archive that arrives with problems can still be edited; Save asks for them to be fixed.
+
+**POD2 audit history.** POD2 archives log each add, remove and change, with the author and time. JSPod keeps the existing trail and adds a record for every edit while **Tools > Record POD2 Audit History** is on. A rename or move is logged as a remove plus an add. Set the name recorded with **Tools > Set Audit Author**. POD1 has no audit history.
+
+**Response lists.** **File > Open Response List** builds an archive from a `.lst` or `.rsp` recipe: pick the folder holding the list and its files. Each line is `file` or `file,ARCHIVE\NAME`; `podFilename:` and `volumeName:` set the file name and the comment; `//` starts a comment. Files are looked up next to the list, then one folder up.
+
+**Reports.** **Tools > Save .inf Report** writes KPod's fixed-column report (name, size at column 30, offset at column 45). **Save .lst List** writes one entry name per line, which Open Response List reads back.
+
+**Mount in pod.ini.** Adds the archive's name to the game's `pod.ini` (pick the folder that holds it). The same POD is never mounted twice, and JSPod warns at 99 mounted PODs.
+
+## Browser support
+
+Opening, editing, undo, validating, previews and saving work in current Chrome, Edge, Firefox and Safari. The File System Access API, available in Chromium browsers, adds:
+
+| Feature | Chromium (Chrome, Edge) | Firefox, Safari |
+|---|---|---|
+| Save | Writes back to the file you opened | Downloads the archive |
+| Save As | Save picker | Asks for a name, then downloads |
+| Open Recent | The last 10 archives | Not available |
+| Extract | Into a folder you pick | One entry downloads; several download as a ZIP |
+| Mount in pod.ini | Yes | Not available |
 
 ## URL integration
 
@@ -120,28 +186,54 @@ Relative archive paths are resolved against the viewer page. When both parameter
 | Component | Role |
 |---|---|
 | ES modules | Application, preview, and user-interface code |
-| Module Web Worker | POD indexing, entry reads, and asset decoding off the main thread |
-| OPFS | Temporary per-session archive storage |
+| Module Web Worker | POD indexing, entry reads, archive writing, and asset decoding off the main thread |
+| OPFS | Working storage: the open archive, added and edited data, and saved output |
 | Three.js r169 | BIN/LWO, SMF, CMD, DFM, and KFM rendering and camera controls |
 | fflate 0.8.2 | ZIP import and export |
-| [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) | POD/EPD parsing and RAW/ACT/OPA decoding, vendored as plain ES modules in `src/vendor/openphotex/` |
+| [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) 1.4 | POD1/POD2/EPD reading, POD1/POD2 writing with CRCs and audit records, texture decoding and encoding, models and MOD rendering, vendored as plain ES modules in `src/vendor/openphotex/` |
 
 Archive parsing and palette decoding come from OpenPhotex, the shared Terminal Reality format library also used by JSTrackViewer, JSTruckViewer and JSMTM2Converter. The vendored copy is generated, never edited here: change OpenPhotex, then refresh it from the OpenPhotex checkout with `npm run build && npm run vendor -- ../JSPod/src/vendor/openphotex`.
 
 ```text
 src/
-├── pod-app.js              Application controller
-├── preview/                File-type preview modules
-├── shared/                 Shared OPFS helpers
-├── ui/                     File tree and dialog components
-├── worker/                 Archive, BIN, SMF, CMD, Nocturne, texture, and image decoders
-├── file-type-info.js       Extension metadata and preview routing
+├── pod-app.js              Application controller: menus, commands, preview
+├── model/                  The editable archive, edits, undo history, validation, list rows,
+│                           search, response lists, reports and pod.ini (no DOM; unit tested)
+├── app/                    Disk access (File System Access API and fallbacks), Tools menu,
+│                           image import
+├── ui/                     Entry list, menus, dialogs, Find panel
+├── preview/                File-type preview modules, text editor
+├── shared/                 OPFS helpers
+├── worker/                 Archive reading and writing, model, texture and image decoders
+├── file-type-info.js       Extension metadata
 └── zip-utils.js            ZIP archive handling
+```
+
+### OPFS layout
+
+The open archive is copied into the browser's private storage, so entries are read on demand and memory use stays flat. Added, replaced and edited data is staged next to it. Save streams the new archive into OPFS, then hands it to your file (or a download) and reopens it.
+
+```text
+sessions/jspod/archive-N.pod    the open archive, then each saved one
+sessions/jspod/blobs/<id>       data added or changed since the last save
+```
+
+Closing the archive or **File > Clear Temporary Storage** empties it.
+
+### Tests
+
+The model, the validation rules and the archive writer have unit tests that run under Node.js 22 or newer, with no dependencies:
+
+```bash
+npm test
 ```
 
 ## Known limitations
 
-- JSPod is an archive viewer and extractor; it does not edit or rebuild POD files.
+- POD archives store no empty folders, so an empty folder created in JSPod is gone after saving.
+- Undo history resets on save, because the saved archive replaces the working copy.
+- An archive that arrived with duplicate entry names can be edited but not saved until the duplicates are renamed or removed. OpenPhotex refuses to write duplicates.
+- EPD is read only; save an EPD as POD1 or POD2.
 - ZIP input opens the first POD member rather than merging multiple archives.
 - Browser image decoding availability depends on the browser's worker APIs.
 - Rendering approximates the updated MTM2 material behavior in Three.js; it is not an exact copy of the game renderer.
@@ -151,9 +243,10 @@ src/
 
 ## Related projects
 
-- [JSTruckViewer](https://github.com/juanputrerasm/JSTruckViewer) — assembles and displays complete MTM2 trucks from TRK and POD data.
-- [JSTrackViewer](https://github.com/juanputrerasm/JSTrackViewer) browser-based POD archive track viewer.
-- [KPodman](https://github.com/juanputrerasm/KPodman) — desktop POD archive manager.
+- [KPod](https://github.com/juanputrerasm/KPod): the desktop POD editor whose feature set JSPod follows. See [docs/PARITY.md](docs/PARITY.md).
+- [JSTruckViewer](https://github.com/juanputrerasm/JSTruckViewer): assembles and displays complete MTM2 trucks from TRK and POD data.
+- [JSTrackViewer](https://github.com/juanputrerasm/JSTrackViewer): browser-based POD archive track viewer.
+- [KPodman](https://github.com/juanputrerasm/KPodman): desktop pod.ini mount manager.
 
 ## Format documentation
 

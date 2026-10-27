@@ -10,7 +10,7 @@ export function initModal(dialog) {
 }
 
 export function showModal({ title, body, onOk, onCancel }) {
-  if (!dialogEl) throw new Error("Modal not initialized — call initModal() first.");
+  if (!dialogEl) throw new Error("Modal not initialized: call initModal() first.");
   // Clear previous content
   dialogEl.innerHTML = "";
 

@@ -7,6 +7,8 @@ import { render as renderImage } from "./image-preview.js";
 import { render as renderTga }   from "./tga-preview.js";
 import { render as renderHex }   from "./hex-preview.js";
 import { render as renderTiff }  from "./tiff-preview.js";
+import { render as renderMod }   from "./mod-preview.js";
+import { render as renderOpa }   from "./opa-preview.js";
 
 const TEXT_EXTENSIONS = new Set([
   "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX",
@@ -33,8 +35,19 @@ export async function dispatch(container, bytes, context) {
   container.classList.toggle("bin-active", ext === "BIN" || ext === "LWO" || ext === "SMF" || ext === "CMD" || ext === "DFM" || ext === "KFM");
 
   try {
-    if (ext === "RAW" ) {
+    // KPod shows .CLR the way it shows .RAW: one palette index per texel.
+    if (ext === "RAW" || ext === "CLR") {
       await renderRaw(container, bytes, context);
+      addPngExport(container, context);
+      return;
+    }
+    if (ext === "OPA") {
+      if (renderOpa(container, bytes)) { addPngExport(container, context); return; }
+      renderHex(container, bytes);
+      return;
+    }
+    if (ext === "MOD") {
+      await renderMod(container, bytes, context);
       return;
     }
     if (ext === "ACT") {
@@ -43,6 +56,7 @@ export async function dispatch(container, bytes, context) {
     }
     if (ext === "TGA") {
       await renderTga(container, bytes, context);
+      addPngExport(container, context);
       return;
     }
     // .SMF and CPR .CMD use their own decoders but emit the same mesh shape as .BIN,
@@ -53,6 +67,7 @@ export async function dispatch(container, bytes, context) {
     }
     if (ext === "TIF" || ext === "TIFF") {
       await renderTiff(container, bytes, context);
+      addPngExport(container, context);
       return;
     }
     if (ext === "WAV") {
@@ -60,7 +75,7 @@ export async function dispatch(container, bytes, context) {
       return;
     }
     if (TEXT_EXTENSIONS.has(ext)) {
-      renderText(container, bytes);
+      renderText(container, bytes, context);
       return;
     }
     if (IMAGE_EXTENSIONS.has(ext)) {
@@ -77,4 +92,37 @@ export async function dispatch(container, bytes, context) {
 
   // Fallback: hex dump
   renderHex(container, bytes);
+}
+
+/**
+ * Adds "Save as PNG" for an image preview. It saves whatever the preview's canvas shows at the
+ * time of the click, so a RAW is saved with the palette currently chosen.
+ */
+function addPngExport(container, context) {
+  if (!container.querySelector("canvas")) return;
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "btn btn-small png-export";
+  button.textContent = "⬇ Save as PNG";
+  button.addEventListener("click", () => {
+    const canvas = container.querySelector("canvas");
+    if (!canvas) return;
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = (context.entry?.title ?? "image").replace(/\.[^.]*$/, "") + ".png";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 30000);
+    }, "image/png");
+  });
+  const controls = container.querySelector(".raw-controls");
+  if (controls) controls.appendChild(button);
+  else {
+    const bar = document.createElement("div");
+    bar.className = "raw-controls";
+    bar.appendChild(button);
+    container.prepend(bar);
+  }
 }

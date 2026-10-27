@@ -10,6 +10,11 @@ export function render(container, bytes) {
   const audio = document.createElement("audio");
   audio.className = "wav-player";
   audio.controls  = true;
+  audio.autoplay  = true;
+  audio.preload   = "auto";
   audio.src       = currentObjectUrl;
   container.replaceChildren(audio);
+  // Selecting an entry is a user gesture, so playback is normally allowed.
+  // Keep the controls usable if a browser's autoplay policy still rejects it.
+  void audio.play().catch(() => {});
 }

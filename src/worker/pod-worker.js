@@ -1,4 +1,9 @@
-import { indexPodFile, readPodEntryBytes } from "./pod-format.js";
+import { indexPodFile, readPodEntryBytes, readRawComment } from "./pod-format.js";
+import { writeArchive } from "./pod-writer.js";
+import { writeBlobToFile } from "./opfs-writer.js";
+import { readFile } from "../shared/opfs.js";
+import { parsePod, verifyPodChecksums, readPod2AuditRecords, encodeRawTexture, quantizeToPalette, decodeIndexedImage, parseMod, renderMod } from "../vendor/openphotex/index.js";
+import { decodeTga } from "./image-decoder.js";
 import { decodeBinModel } from "./bin-decoder.js";
 import { decodeSmfModel } from "./smf-decoder.js";
 import { decodeCprCmdModel } from "./cmd-decoder.js";
@@ -15,6 +20,65 @@ const handlers = {
   async readEntryBytes({ opfsPodPath, entry }) {
     const bytes = await readPodEntryBytes(opfsPodPath, entry);
     return { bytes };
+  },
+
+  async readRawComment({ opfsPodPath, format }) {
+    return { bytes: await readRawComment(opfsPodPath, format) };
+  },
+
+  /** Copies a File, Blob or bytes into OPFS at `path`. */
+  async stageBlob({ path, data }) {
+    const blob = data instanceof Blob ? data : new Blob([data]);
+    await writeBlobToFile(path, blob);
+    return { length: blob.size };
+  },
+
+  async writeArchive(job, progress) {
+    return writeArchive(job, progress);
+  },
+
+  /** POD2 CRC check of a whole staged archive (it is read into memory). */
+  async verifyChecksums({ opfsPodPath }) {
+    const bytes = new Uint8Array(await (await readFile(opfsPodPath)).arrayBuffer());
+    const pod = parsePod(bytes);
+    if (pod.format !== "pod2") return null;
+    return verifyPodChecksums(bytes, pod);
+  },
+
+  /**
+   * True-colour art to an 8-bit .RAW: with its own new palette (encodeRawTexture, square only),
+   * or mapped onto `palette` (768 bytes, 8-bit). Also returns the result decoded for a preview.
+   */
+  async encodeRaw({ rgba, width, height, palette }) {
+    const pixels = rgba instanceof Uint8Array ? rgba : new Uint8Array(rgba.buffer ?? rgba);
+    let raw, act;
+    if (palette) {
+      act = palette instanceof Uint8Array ? palette : new Uint8Array(palette);
+      raw = quantizeToPalette(pixels, width, height, act);
+    } else {
+      ({ raw, act } = encodeRawTexture(pixels, width, height));
+    }
+    const image = decodeIndexedImage(raw, act, width, height, {});
+    return [{ raw, act, preview: image.rgba }, [raw.buffer, image.rgba.buffer]];
+  },
+
+  /** A ProTracker module rendered to stereo PCM (OpenPhotex renderMod), or null when it is not one. */
+  async renderMod({ bytes }) {
+    const song = parseMod(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+    if (!song) return null;
+    const pcm = renderMod(song, { sampleRate: 44100, maxSeconds: 600 });
+    return [{ title: song.title, channels: song.channels, ...pcm }, [pcm.left.buffer, pcm.right.buffer]];
+  },
+
+  async decodeTgaImage({ bytes, name }) {
+    const image = decodeTga(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes), name);
+    return [image, [image.rgba.buffer]];
+  },
+
+  async readAuditTrail({ path, offset, length }) {
+    const file = await readFile(path);
+    const bytes = new Uint8Array(await file.slice(offset, offset + length).arrayBuffer());
+    return readPod2AuditRecords(bytes, offset);
   },
 
   async decodeBin({ bytes, name, origin }) {
@@ -129,7 +193,8 @@ self.addEventListener("message", async (event) => {
   try {
     const handler = handlers[type];
     if (!handler) throw new Error(`Unknown worker message type: ${type}`);
-    const result = await handler(payload ?? {});
+    const progress = (message) => self.postMessage({ id, progress: message });
+    const result = await handler(payload ?? {}, progress);
     if (Array.isArray(result)) {
       const [data, transfers] = result;
       self.postMessage({ id, ok: true, payload: data }, transfers);

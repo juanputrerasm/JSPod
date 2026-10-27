@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>JSPod - TRI POD Archive Viewer</title>
-  <meta name="description" content="JSPod is a browser-based POD archive viewer for Terminal Reality game files. Supports POD1, POD2, and EPD formats with RAW image, BIN model, text, and audio preview.">
-  <meta name="keywords" content="POD viewer, Terminal Reality, MTM2, Monster Truck Madness, Hellbender, Terminal Velocity, Fury3, Nocturne, BIN viewer, RAW image">
+  <title>JSPod - TRI POD Archive Editor</title>
+  <meta name="description" content="JSPod is a browser-based POD archive editor for Terminal Reality games. Create, edit, validate and save POD1 and POD2 archives, open EPD, and preview RAW, BIN, SMF, text, audio and more.">
+  <meta name="keywords" content="POD editor, POD viewer, Terminal Reality, MTM2, Monster Truck Madness, 4x4 Evolution, Hellbender, Terminal Velocity, Fury3, Nocturne, BIN viewer, RAW image">
   <meta name="author" content="Juan Pablo Utreras">
   <link rel="stylesheet" href="./styles.css">
   <script type="importmap">
@@ -20,65 +20,73 @@
 <body>
   <div class="app-shell">
 
-    <!-- ── TOP BAR ─────────────────────────────────────────────────────────── -->
     <header class="topbar">
       <div class="brand">
-        <h1><a href="https://github.com/juanputrerasm/JSPod">JSPod <span class="app-version">v1.4.0</span></a></h1>
-        <p>Online TRI POD Viewer</p>
+        <h1><a href="https://github.com/juanputrerasm/JSPod">JSPod <span class="app-version">v2.0.0</span></a></h1>
+        <p>TRI POD Archive Editor</p>
       </div>
-      <div class="load-controls">
-        <input id="file-input" type="file" accept=".pod,.epd,.zip" hidden>
-        <button id="open-file-btn" type="button">Open POD / EPD / ZIP</button>
-        <div class="url-group">
-          <input id="url-input" type="url" placeholder="https://example.com/game.pod  or  ?url=…" spellcheck="false">
-          <button id="open-url-btn" type="button">Open from URL</button>
-        </div>
-        <button id="clear-btn" type="button" class="quiet">Clear temp</button>
-      </div>
-      <div class="status-strip">
-        <span id="status-bar">Ready.</span>
-      </div>
+      <nav id="menubar" aria-label="Main menu"></nav>
+      <div class="status-strip"><span id="status-bar">Ready.</span></div>
     </header>
 
-    <!-- ── ARCHIVE INFO BAR ────────────────────────────────────────────────── -->
-    <div id="archive-info" class="archive-info-bar">No archive loaded.</div>
-
-    <!-- ── FILTER / TOOLBAR ────────────────────────────────────────────────── -->
-    <div class="filter-bar">
-      <span class="search-icon">🔍</span>
-      <input id="search-input" type="search" placeholder="Filter files…" spellcheck="false">
-      <button id="expand-all-btn"   type="button" class="quiet">Expand all</button>
-      <button id="collapse-all-btn" type="button" class="quiet">Collapse all</button>
-      <button id="download-all-btn" type="button" class="quiet" disabled>⬇ Download all as ZIP</button>
+    <div id="toolbar" class="toolbar-wrap">
+      <div class="toolbar" role="toolbar" aria-label="Archive">
+        <button type="button" data-action="new" title="New archive">＋ New</button>
+        <button type="button" data-action="open" title="Open a POD, EPD or ZIP">📂 Open</button>
+        <button type="button" data-action="save" title="Save">💾 Save</button>
+        <span class="toolbar-sep"></span>
+        <button type="button" data-action="undo" title="Undo">↶ Undo</button>
+        <button type="button" data-action="redo" title="Redo">↷ Redo</button>
+        <span class="toolbar-sep"></span>
+        <button type="button" data-action="add" title="Add files">Add Files</button>
+        <button type="button" data-action="addFolder" title="Add a folder and everything in it">Add Folder</button>
+        <button type="button" data-action="newFolder" title="Create an empty folder">New Folder</button>
+        <button type="button" data-action="remove" title="Remove the selection (Delete)">Remove</button>
+        <span class="toolbar-sep"></span>
+        <button type="button" data-action="extract" title="Extract the selection">⬇ Extract</button>
+        <button type="button" data-action="find" title="Find (Ctrl+F)">🔍 Find</button>
+      </div>
+      <div class="archive-bar" id="archive-info">
+        <span id="archive-name" class="archive-name">No archive open</span>
+        <span id="archive-format" class="badge" hidden></span>
+        <label class="archive-field comment-field">Comment
+          <input id="comment-input" type="text" spellcheck="false" disabled>
+          <span id="comment-count" class="comment-count"></span>
+        </label>
+        <label class="archive-field">Save as
+          <select id="output-format" disabled>
+            <option value="pod1">POD1</option>
+            <option value="pod2">POD2</option>
+          </select>
+        </label>
+      </div>
+      <div class="filter-bar">
+        <span class="search-icon">🔍</span>
+        <input id="search-input" type="search" placeholder="Filter by path..." spellcheck="false">
+        <button type="button" data-action="expand" class="quiet">Expand all</button>
+        <button type="button" data-action="collapse" class="quiet">Collapse all</button>
+      </div>
     </div>
 
-    <!-- ── MAIN TWO-COLUMN LAYOUT ───────────────────────────────────────── -->
     <main class="main-layout" id="main-layout">
-
-      <!-- File tree (left) -->
-      <div class="tree-panel">
-        <div id="file-tree" class="file-tree-scroll"></div>
-      </div>
-
-      <!-- Preview pane (right) -->
-      <div class="preview-panel">
+      <section class="list-panel">
+        <div id="entry-list"></div>
+      </section>
+      <div class="splitter" id="splitter" role="separator" aria-orientation="vertical" title="Drag to resize"></div>
+      <section class="preview-panel">
         <div id="preview-meta" class="preview-meta"></div>
-        <div id="preview-content" class="preview-content">
-          <p class="preview-placeholder">Select a file to preview it here.</p>
-        </div>
-      </div>
-
+        <div id="preview-content" class="preview-content"></div>
+      </section>
     </main>
 
-    <!-- ── LOADING OVERLAY ─────────────────────────────────────────────────── -->
+    <footer class="footer"><span id="footer-status"></span></footer>
+
     <div id="loading-overlay" class="loading-overlay" hidden>
       <div class="spinner"></div>
-      <span id="loading-msg">Loading…</span>
+      <span id="loading-msg">Loading...</span>
     </div>
 
-    <!-- ── MODAL (shared dialog) ───────────────────────────────────────────── -->
     <dialog id="main-dialog" class="main-dialog"></dialog>
-
   </div>
 
   <script type="module" src="./src/main.js"></script>

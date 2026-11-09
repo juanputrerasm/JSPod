@@ -950,7 +950,7 @@ export class PodApp {
     const rows = [
       ["Path", entry.name],
       ["Size", `${formatFileSize(entry.length)} (${entry.length.toLocaleString()} bytes)`],
-      ["Format", getRawDescription(entry.title, entry.length)],
+      ["Format", getRawDescription(entry.title, entry.length, entry.name)],
       ["Offset", entry.offset === null ? "not saved yet" : String(entry.offset)],
     ];
     if (entry.timestamp) rows.push(["Timestamp", new Date(entry.timestamp * 1000).toLocaleString()]);
@@ -1112,7 +1112,7 @@ export class PodApp {
   }
 
   showAbout() {
-    return alertDialog("About JSPod", "JSPod 2.0.0\n\nA web POD archive editor for Terminal Reality games by Kmaster.\n\nFile formats are read and written by OpenPhotex library.\n\n License: Apache-2.0.");
+    return alertDialog("About JSPod", "JSPod 2.1.0\n\nA web POD archive editor for Terminal Reality games by Kmaster.\n\nFile formats are read and written by OpenPhotex library.\n\n License: Apache-2.0.");
   }
 
   async autoloadFromPageQuery() {

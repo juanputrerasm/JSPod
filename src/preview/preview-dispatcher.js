@@ -9,6 +9,8 @@ import { render as renderHex }   from "./hex-preview.js";
 import { render as renderTiff }  from "./tiff-preview.js";
 import { render as renderMod }   from "./mod-preview.js";
 import { render as renderOpa }   from "./opa-preview.js";
+import { renderMwtr, renderMveg, renderHeightmap } from "./cp4-world-preview.js";
+import { cp4WorldMagic, heightmapRawLayout } from "../model/cp4-world.js";
 
 const TEXT_EXTENSIONS = new Set([
   "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX",
@@ -18,8 +20,12 @@ const TEXT_EXTENSIONS = new Set([
   // renames the file, so the payload is the same text it was before.
   "SI2","SIX","SIY","TRX","TXV",
   // 4x4 Evolution world files, all line-oriented text like the rest of the family.
-  "VEG","WAT"
+  "VEG","WAT",
+  // Community Patch 4: the 3D cockpit layout and the per-model surface material sidecar.
+  "CPT","SRF"
 ]);
+
+const AUDIO_MIME = { WAV: "audio/wav", OGG: "audio/ogg", MP3: "audio/mpeg" };
 
 const IMAGE_EXTENSIONS = new Set(["BMP","PNG","JPG","JPEG","GIF","WEBP"]);
 const IMAGE_MIME = {
@@ -36,6 +42,13 @@ export async function dispatch(container, bytes, context) {
 
   try {
     // KPod shows .CLR the way it shows .RAW: one palette index per texel.
+    // A CP4 16-bit DATA heightmap is not a paletted texture; it gets its own greyscale view.
+    const heightmap = ext === "RAW" ? heightmapRawLayout(context.entry?.name, bytes.length) : null;
+    if (heightmap) {
+      renderHeightmap(container, bytes, heightmap);
+      addPngExport(container, context);
+      return;
+    }
     if (ext === "RAW" || ext === "CLR") {
       await renderRaw(container, bytes, context);
       addPngExport(container, context);
@@ -70,8 +83,19 @@ export async function dispatch(container, bytes, context) {
       addPngExport(container, context);
       return;
     }
-    if (ext === "WAV") {
-      renderWav(container, bytes);
+    if (AUDIO_MIME[ext]) {
+      renderWav(container, bytes, AUDIO_MIME[ext]);
+      return;
+    }
+    // CP4 writes binary .VEG ("MVEG") and .WTR ("MWTR"). 4x4 Evolution's .VEG is text with
+    // no magic, so anything else in a .VEG falls through to the text preview.
+    const magic = (ext === "VEG" || ext === "WTR") ? cp4WorldMagic(bytes) : null;
+    if (magic === "MWTR") {
+      renderMwtr(container, bytes);
+      return;
+    }
+    if (magic === "MVEG") {
+      renderMveg(container, bytes);
       return;
     }
     if (TEXT_EXTENSIONS.has(ext)) {

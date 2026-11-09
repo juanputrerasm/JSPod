@@ -18,7 +18,7 @@ export function cycleSort(sort, column) {
 }
 
 export function describeEntry(entry) {
-  return getRawDescription(entry.title, entry.length);
+  return getRawDescription(entry.title, entry.length, entry.name);
 }
 
 /** Every folder key in the document, for "collapse all". */

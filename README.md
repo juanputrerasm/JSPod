@@ -16,6 +16,12 @@ JSPod creates, edits and saves POD1 and POD2 archives, and opens EPD and ZIP arc
 
 ---
 
+## What's new in 2.1
+
+- OGG Vorbis and MP3 entries play in the preview.
+- Community Patch 4 files: lake maps (.WTR) and MTM2 vegetation (.VEG) shown as tables and top-down maps, and 16-bit heightmaps (`DATA\*.RAW` of 128 KB or 2 MB) shown as greyscale height images.
+- .CPT (3D cockpit layouts), .SRF (surface meshes) and .GST (Time Attack ghosts) recognised, with the _V, _G and _H images.
+
 ## What's new in 2.0
 
 JSPod is now an archive editor, not only a viewer. It covers everything the desktop tool KPod does, in the browser:
@@ -67,12 +73,13 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 | `.SMF` | 4x4 Evolution 1 and 2 models, in the same viewer |
 | `.CMD` | CART Precision Racing high-detail vehicle models, with alternate aero-package selection |
 | `.DFM`, `.KFM` | Nocturne skeletal characters and morph/prop models, with their RAW/ACT textures |
-| `.RAW` | Paletted or grayscale texture with automatic dimension detection and ACT palette selection |
+| `.RAW` | Paletted or grayscale texture with automatic dimension detection and ACT palette selection. A 16-bit `DATA\<track>.RAW` heightmap (131,072 or 2,097,152 bytes) is shown as greyscale with its height range in feet |
 | `.ACT` | 256-color palette grid |
 | `.TIF` | 4x4 Evolution 2 palette-indexed TIFF, drawn over a checkerboard when it carries an opacity sample |
 | `.PNG`, `.TGA`, `.BMP`, `.JPG`, `.JPEG`, `.GIF`, `.WEBP` | Image preview |
-| `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SIX`, `.SIY`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, `.VEG`, `.WAT`, and other text formats | Text preview |
-| `.WAV` | Audio player |
+| `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SIX`, `.SIY`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, `.VEG`, `.WAT`, `.CPT`, `.SRF`, and other text formats | Text preview |
+| `.WTR`, `.VEG` with CP4 magic | Community Patch 4 lakes (`MWTR`) and vegetation (`MVEG`): tables plus a top-down tile map |
+| `.WAV`, `.OGG`, `.MP3` | Audio player (`.OGG` and `.MP3` play where the browser has the decoder) |
 | `.MOD` | ProTracker music, rendered by OpenPhotex and played with seek and time |
 | `.OPA` | Opacity plane, as greyscale |
 | `.CLR` | Shown like `.RAW` |
@@ -87,6 +94,17 @@ is the plain-text record asserting what the pod around it contains, and `.SIX`,
 over. Art files name the map they are: a `_N`, `_AO`, `_DTL` or `_MASK` suffix on a
 `.RAW`, `.PNG` or `.TGA` stem is reported as a normal map, ambient occlusion,
 terrain detail normal or terrain detail mask.
+
+Community Patch 4 (MTM2 beta 0.52) files are described too. `.OGG` and `.MP3` are its
+music, `.CPT` the 3D cockpit layout and `.SRF` a model's surface material sidecar, both
+text. A `.VEG` starting with `MVEG` is CP4's binary vegetation (species, trees, grass and
+its RULE/INFO text), any other `.VEG` is 4x4 Evolution's text; `.WTR` (`MWTR`) holds the
+lakes and the tile map of which body covers each terrain tile. `.GST` Time Attack ghosts
+are shown as hex. On a `.PNG`, `_V` and `_G` name the tree and grass vegetation masks and
+`_H` the 16-bit grey height map. A `DATA\<track>.RAW` of 131,072 bytes (u16 256x256) or
+2,097,152 bytes (u16 1024x1024 at an 8 ft grid) is a CP4 heightmap in 1/128 ft; CART
+Precision Racing also ships 131,072-byte u16 RAWs in 1/16 ft, so that size offers both
+units.
 
 The BIN viewer understands classic and modern MTM2 records, including long texture names, material assignments, reflection and color blocks, and material parameters. For diffuse textures it resolves `.PNG`, then `.TGA`, then `.RAW`; `_N` normal maps use DirectX/green-down tangent space. Their RGB channels are decoded as X/Y/Z, alpha is ignored, and the engine has no roughness texture channel.
 

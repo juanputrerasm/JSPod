@@ -1,3 +1,5 @@
+import { heightmapRawLayout } from "./model/cp4-world.js";
+
 // Extension → { description, icon } mapping for Terminal Reality / related game formats.
 // Icons are Unicode characters rendered as text.
 
@@ -55,10 +57,16 @@ const FILE_TYPES = {
   MOD:  { description: "Module audio (MOD)",         icon: "🎵" },
   MIX:  { description: "MIX file",             icon: "📄" },
   KLP:  { description: "Audio clip data",            icon: "📄" },
+  OGG:  { description: "Ogg Vorbis music (CP4)",     icon: "🎵" },
+  MP3:  { description: "MP3 music (CP4)",            icon: "🎵" },
 
   // Game data / track format
   SIT:  { description: "Situation (track definition)", icon: "🗺" },
-  VEG:  { description: "4x4 Evo vegetation placement", icon: "🌲" },
+  VEG:  { description: "Vegetation (4x4 Evo text, or CP4 binary 'MVEG')", icon: "🌲" },
+  WTR:  { description: "Lakes / water bodies (CP4)", icon: "💧" },
+  CPT:  { description: "3D cockpit layout (CP4)",    icon: "📄" },
+  SRF:  { description: "Surface mesh materials (CP4)", icon: "📄" },
+  GST:  { description: "Time Attack ghost (CP4, magic 'MTM2GHOST 1')", icon: "📄" },
   WAT:  { description: "4x4 Evo water material",     icon: "💧" },
   SDW:  { description: "4x4 Evo shadow overlay grid", icon: "📄" },
   RTD:  { description: "4x4 Evo terrain auxiliary grid", icon: "📄" },
@@ -129,6 +137,15 @@ const HD_MAP_ROLES = [
 
 const ART_EXTENSIONS = new Set(["RAW", "PNG", "TGA"]);
 
+// Community Patch 4 track masks and heights, all PNG: ART\<track>_V.PNG places trees,
+// ART\<track>_G.PNG grass, and DATA\<track>_H.PNG is a 16-bit grey height map. One letter
+// is a short suffix to claim, so these are only read on a .PNG.
+const CP4_PNG_ROLES = [
+  ["_V", "vegetation mask, trees"],
+  ["_G", "vegetation mask, grass"],
+  ["_H", "16-bit height map"],
+];
+
 function extensionOf(filename) {
   return String(filename ?? "").toUpperCase().replace(/.*\./, "");
 }
@@ -139,7 +156,8 @@ export function getHdMapRole(filename) {
     .toUpperCase()
     .replace(/.*[\\/]/, "")
     .replace(/\.[^.]*$/, "");
-  for (const [suffix, role] of HD_MAP_ROLES) {
+  const roles = extensionOf(filename) === "PNG" ? [...HD_MAP_ROLES, ...CP4_PNG_ROLES] : HD_MAP_ROLES;
+  for (const [suffix, role] of roles) {
     // A bare "_N.PNG" has no stem to be a map of, so the suffix has to be carried.
     if (stem.length > suffix.length && stem.endsWith(suffix)) return role;
   }
@@ -163,8 +181,16 @@ export function getFileTypeInfo(filename) {
   return FILE_TYPES[ext] ?? DEFAULT_TYPE;
 }
 
-export function getRawDescription(filename, byteLength) {
+/**
+ * `path` is the entry's full pod path, when known: a 16-bit heightmap RAW is only
+ * recognised by its size inside a DATA folder.
+ */
+export function getRawDescription(filename, byteLength, path = filename) {
   const ext = extensionOf(filename);
+  if (ext === "RAW") {
+    const height = heightmapDescription(path, byteLength);
+    if (height) return height;
+  }
   // An .OPA is an unheadered byte per pixel like a .RAW, so its side length is worth the
   // same read-out; without it a 65,536-byte opacity plane says nothing about its size.
   const base = (ext === "RAW" || ext === "CLR")
@@ -173,6 +199,14 @@ export function getRawDescription(filename, byteLength) {
       ? rawSizeDescription(byteLength).replace("RAW image data", "Opacity plane")
       : getFileTypeInfo(filename).description;
   return ART_EXTENSIONS.has(ext) ? withMapRole(base, filename) : base;
+}
+
+function heightmapDescription(path, byteLength) {
+  const layout = heightmapRawLayout(path, byteLength);
+  if (!layout) return null;
+  return layout.side === 256
+    ? "Height map (256×256 u16; CP4 feet = v/128, CPR feet = v/16)"
+    : "Height map (1024×1024 u16, CP4, 8 ft grid, feet = v/128)";
 }
 
 function rawSizeDescription(byteLength) {

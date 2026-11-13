@@ -2,7 +2,7 @@
 
 JSPod 2.0 follows the feature set of KPod 2.0.1, the desktop POD editor (`KPod.Windows/UI/MainForm.cs`). This page maps each KPod feature to where JSPod implements it, lists the deliberate differences, and ends with a manual test checklist adapted from KPod's `MANUAL-CHECKLIST.md`.
 
-File formats are not implemented in either app's UI code. KPod has its own readers and writers; JSPod uses OpenPhotex 1.4, which added a POD2 writer for this work. OpenPhotex rebuilds every stock POD1 directory and all 59 4x4 Evolution POD2 archives in the local install byte for byte.
+File formats are not implemented in either app's UI code. KPod has its own readers and writers; JSPod uses OpenPhotex (vendored 1.7.3; 1.4 added a POD2 writer for this work). OpenPhotex rebuilds every stock POD1 directory and all 59 4x4 Evolution POD2 archives in the local install byte for byte.
 
 ## Feature map
 
@@ -40,6 +40,7 @@ File formats are not implemented in either app's UI code. KPod has its own reade
 | TGA, PNG, BMP, JPG, GIF previews | Same | `tga-preview.js`, `image-preview.js` |
 | TIF (KPod falls back to hex) | Evo palette TIFFs decode | `tiff-preview.js` |
 | OPA (KPod shows hex) | Greyscale opacity view | `opa-preview.js` |
+| CP4 .WTR, .VEG, .WFL (KPod shows hex or text) | Tables and top-down maps of lakes, vegetation and beta 0.53 waterfalls (OpenPhotex `parseWtr`, `parseMtm2Veg`, `parseWfl`) | `cp4-world-preview.js` |
 | Text view | Text view with an editor | `text-preview.js` |
 | Hex dump of the first 4 KB | Paged through the whole entry | `hex-preview.js` |
 | WAV player | `<audio>` with play, pause, seek, time | `wav-preview.js` |

@@ -64,6 +64,7 @@ const FILE_TYPES = {
   SIT:  { description: "Situation (track definition)", icon: "🗺" },
   VEG:  { description: "Vegetation (4x4 Evo text, or CP4 binary 'MVEG')", icon: "🌲" },
   WTR:  { description: "Lakes / water bodies (CP4)", icon: "💧" },
+  WFL:  { description: "Waterfalls (CP4 beta 0.53)", icon: "💧" },
   CPT:  { description: "3D cockpit layout (CP4)",    icon: "📄" },
   SRF:  { description: "Surface mesh materials (CP4)", icon: "📄" },
   GST:  { description: "Time Attack ghost (CP4, magic 'MTM2GHOST 1')", icon: "📄" },

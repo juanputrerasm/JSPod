@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { cp4WorldMagic, parseMwtr, parseMveg, heightmapRawLayout, readHeightSamples } from "../src/model/cp4-world.js";
+import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { heightmapRawLayout, HEIGHTMAP_SCALES } from "../src/model/cp4-world.js";
 import { getFileTypeInfo, getRawDescription, getHdMapRole } from "../src/file-type-info.js";
+import {
+  isWtr, isMtm2Veg, isWfl, parseWtr, parseMtm2Veg, vegTreeAt, parseWfl, writeWfl, decodeMtm2Heights,
+  parsePod, findPodEntry, readPodEntry,
+} from "../src/vendor/openphotex/index.js";
+import { renderMwtr, renderMveg, renderMwfl, renderHeightmap } from "../src/preview/cp4-world-preview.js";
+
+// Fila's beta 0.53 sandbox (fog_test.pod: two waterfalls, lakes, vegetation). Tests that read it
+// skip when it is absent.
+const SANDBOX_053 = process.env.JSPOD_CP4_053 ?? join(homedir(), "games", "cp4sandbox053", "fog_test.pod");
 
 function container(magic, chunks, flags = 0) {
   const dirSize = chunks.length * 16;
@@ -37,14 +49,18 @@ function table(count, stride, fill, extra = 0) {
   return bytes;
 }
 
-test("cp4: magic sniffing tells MWTR and MVEG from Evo text", () => {
-  assert.equal(cp4WorldMagic(new TextEncoder().encode("MWTR....")), "MWTR");
-  assert.equal(cp4WorldMagic(new TextEncoder().encode("MVEG")), "MVEG");
-  assert.equal(cp4WorldMagic(new TextEncoder().encode("tree oak 1 2 3")), null);
-  assert.equal(cp4WorldMagic(new Uint8Array(2)), null);
+test("cp4: magic sniffing tells MWTR, MVEG and MWFL from Evo text", () => {
+  const enc = (t) => new TextEncoder().encode(t);
+  assert.equal(isWtr(enc("MWTR....")), true);
+  assert.equal(isMtm2Veg(enc("MVEG")), true);
+  assert.equal(isWfl(enc("MWFL")), true);
+  for (const sniff of [isWtr, isMtm2Veg, isWfl]) {
+    assert.equal(sniff(enc("tree oak 1 2 3")), false);
+    assert.equal(sniff(new Uint8Array(2)), false);
+  }
 });
 
-test("cp4: MWTR bodies and tile map", () => {
+function wtrBytes() {
   const body = table(2, 64, (dv, b, o, i) => {
     b[o] = i + 1;
     b[o + 1] = 2;
@@ -56,25 +72,30 @@ test("cp4: MWTR bodies and tile map", () => {
   });
   const tmap = new Uint8Array(65536);
   tmap[3 + 4 * 256] = 2;
-  const lakes = parseMwtr(container("MWTR", [{ id: "BODY", bytes: body }, { id: "TMAP", bytes: tmap }]));
-  assert.equal(lakes.bodies.length, 2);
-  assert.equal(lakes.bodies[0].reflective, true);
-  assert.equal(lakes.bodies[1].reflective, false);
-  assert.equal(lakes.bodies[0].heightFeet, 150.5);
-  assert.deepEqual(lakes.bodies[0].seeds, [{ x: 10, z: 20 }, { x: 0, z: 0 }]);
-  assert.deepEqual(lakes.bodies[1].bounds, { minX: 5, minZ: 6, maxX: 7, maxZ: 8 });
-  assert.equal(lakes.bodies[1].tileCount, 43);
-  assert.equal(lakes.tmap[3 + 4 * 256], 2);
-  assert.deepEqual(lakes.chunks.map((c) => c.id), ["BODY", "TMAP"]);
+  return container("MWTR", [{ id: "BODY", bytes: body }, { id: "TMAP", bytes: tmap }]);
+}
+
+test("cp4: MWTR lakes and tile map through the vendored parseWtr", () => {
+  const wtr = parseWtr(wtrBytes());
+  assert.equal(wtr.lakes.length, 2);
+  assert.equal(wtr.lakes[0].reflective, true);
+  assert.equal(wtr.lakes[1].reflective, false);
+  assert.equal(wtr.lakes[0].heightFt, 150.5);
+  assert.deepEqual(wtr.lakes[0].seeds, [{ x: 10, z: 20 }, { x: 0, z: 0 }]);
+  assert.deepEqual(wtr.lakes[1].box, { minX: 5, minZ: 6, maxX: 7, maxZ: 8 });
+  assert.equal(wtr.lakes[1].tileCount, 43);
+  assert.equal(wtr.tileMap[3 + 4 * 256], 2);
+  assert.equal(wtr.tilesX, 256);
 });
 
-test("cp4: MVEG species, trees, grass and text chunks", () => {
+function vegBytes() {
   const spec = table(1, 192, (dv, b, o) => {
     b.set(new TextEncoder().encode("OAK.BIN"), o);
     b.set(new TextEncoder().encode("OAKFAR.BIN"), o + 64);
     b[o + 128] = 0; b[o + 129] = 1; b[o + 130] = 1 | 8;
     dv.setUint16(o + 132, 128, true);
     dv.setUint16(o + 134, 160, true);
+    b.set(new TextEncoder().encode("Oak"), o + 148);
   });
   const tree = table(2, 20, (dv, b, o, i) => {
     dv.setInt32(o, 256 * 100 * (i + 1), true);
@@ -88,27 +109,132 @@ test("cp4: MVEG species, trees, grass and text chunks", () => {
   const g = new DataView(gras.buffer);
   g.setUint32(0, 2, true); g.setUint16(4, 12, true); g.setUint32(8, 1, true);
   g.setUint16(12, 9, true); g.setUint16(14, 11, true); g.setUint32(16, 0, true); g.setUint32(20, 2, true);
-  const info = new TextEncoder().encode("name=Test\r\n");
-  const veg = parseMveg(container("MVEG", [
+  const info = new TextEncoder().encode("tool=Test\r\ntrees=2\r\n");
+  return container("MVEG", [
     { id: "SPEC", bytes: spec }, { id: "TREE", bytes: tree }, { id: "GRAS", bytes: gras }, { id: "INFO", bytes: info },
-  ], 3));
-  assert.equal(veg.header.flags, 3);
+  ]);
+}
+
+test("cp4: MVEG species, trees, grass and INFO through the vendored parseMtm2Veg", () => {
+  const veg = parseMtm2Veg(vegBytes());
   assert.equal(veg.species[0].model, "OAK.BIN");
   assert.equal(veg.species[0].farModel, "OAKFAR.BIN");
+  assert.equal(veg.species[0].name, "Oak");
   assert.equal(veg.species[0].collide, 1);
-  assert.equal(veg.species[0].trunkDiameterFeet, 2);
-  assert.equal(veg.species[0].trunkHeightFeet, 10);
-  assert.equal(veg.species[0].count, 2);
-  assert.deepEqual(veg.trees[1], { x: 200, y: 5, z: -3, species: 0, heading: 0.25, scale: 2, tint: 7, tier: 1 });
-  assert.equal(veg.clumps, 2);
-  assert.deepEqual(veg.grassTiles, [{ tx: 9, tz: 11, first: 0, count: 2 }]);
-  assert.equal(veg.info, "name=Test\r\n");
+  assert.equal(veg.species[0].trunkDiameter / 64, 2);
+  assert.equal(veg.species[0].trunkHeight / 16, 10);
+  assert.equal(veg.trees.count, 2);
+  assert.deepEqual(vegTreeAt(veg.trees, 1), { x: 200, y: 5, z: -3, headingTurns: 0.25, scale: 2 });
+  assert.equal(veg.trees.tier[1], 1);
+  assert.equal(veg.clumps.count, 2);
+  assert.deepEqual(veg.clumps.tiles, [{ tx: 9, tz: 11, first: 0, count: 2 }]);
+  assert.deepEqual(veg.info, { tool: "Test", trees: "2" });
   assert.equal(veg.rule, null);
 });
 
-test("cp4: truncated chunk is refused", () => {
-  const bytes = container("MWTR", [{ id: "TMAP", bytes: new Uint8Array(16) }]);
-  assert.throws(() => parseMwtr(bytes.subarray(0, bytes.length - 4)), /runs past/);
+test("cp4: truncated or malformed sidecars are refused", () => {
+  const wtr = wtrBytes();
+  assert.throws(() => parseWtr(wtr.subarray(0, 40)), RangeError);
+  const veg = vegBytes();
+  assert.throws(() => parseMtm2Veg(veg.subarray(0, 20)), RangeError);
+});
+
+const FALLS = [
+  {
+    source: 2, flags: 7, speed: 96, height: 648, opacity: 100, mist: 90, volume: 100, mistDepth: 100, mistHeight: 30,
+    points: [{ x: 60432, z: 76800 }, { x: 61936, z: 76800 }], soundName: "", textureName: "",
+  },
+  {
+    // A spring whose crest crosses the world edge at x = 8192 ft (131072 sixteenths).
+    source: 0, flags: 2, speed: 64, height: 751, opacity: 80, mist: 0, volume: 50,
+    points: [{ x: 131072 - 160, z: 1600 }, { x: 160, z: 1600 }, { x: 160, z: 1600 + 480 }],
+    soundName: "RIVER", textureName: "FALLTEX",
+  },
+];
+
+test("cp4: MWFL v1.1 waterfalls written by writeWfl read back through parseWfl", () => {
+  const bytes = writeWfl(FALLS);
+  assert.equal(isWfl(bytes), true);
+  const wfl = parseWfl(bytes);
+  assert.equal(wfl.major, 1);
+  assert.equal(wfl.minor, 1);
+  assert.equal(wfl.stride, 132);
+  assert.equal(wfl.falls.length, 2);
+  const [lake, spring] = wfl.falls;
+  assert.equal(lake.source, 2);
+  assert.equal(lake.heightFt, 324);
+  assert.equal(lake.speedFtPerSec, 6);
+  assert.equal(lake.mistHeight, 30);
+  assert.deepEqual([lake.freeze, lake.splash, lake.sound], [true, true, true]);
+  assert.equal(spring.source, 0);
+  assert.deepEqual([spring.freeze, spring.splash, spring.sound], [false, true, false]);
+  assert.equal(spring.soundName, "RIVER");
+  assert.equal(spring.textureName, "FALLTEX");
+  assert.equal(spring.points.length, 3);
+});
+
+test("cp4: MWFL v1.0 when every mist size is the default, and refusals", () => {
+  const plain = FALLS.map((f) => ({ ...f, mistDepth: 100, mistHeight: 0 }));
+  const wfl = parseWfl(writeWfl(plain));
+  assert.equal(wfl.minor, 0);
+  assert.equal(wfl.stride, 128);
+  assert.equal(wfl.falls[0].mistHeight, 100);
+  const bad = writeWfl(plain);
+  bad[32 + 16 + 8 + 2] = 1; // first fall's point count
+  assert.throws(() => parseWfl(bad), /points/);
+  const major = writeWfl(plain);
+  major[4] = 2;
+  assert.throws(() => parseWfl(major), /major/);
+});
+
+// A tiny stand-in for the DOM, enough for the CP4 previews to run under node --test.
+function fakeDom() {
+  const ctx = new Proxy({}, {
+    get: (t, k) => k in t ? t[k] : k === "createImageData" ? (w, h) => ({ data: new Uint8ClampedArray(w * h * 4) }) : () => {},
+    set: (t, k, v) => { t[k] = v; return true; },
+  });
+  const el = (tag) => {
+    const node = {
+      tag, children: [], style: {}, className: "", textContent: "",
+      append: (...c) => node.children.push(...c), appendChild: (c) => node.children.push(c),
+      replaceChildren: (...c) => { node.children = c; }, addEventListener: () => {}, getContext: () => ctx,
+    };
+    return node;
+  };
+  return { createElement: el };
+}
+
+function text(node) {
+  return [node.textContent, ...(node.children ?? []).map(text)].join(" ");
+}
+
+test("cp4: previews render WTR, VEG, WFL and a heightmap through the vendor", () => {
+  const saved = globalThis.document;
+  globalThis.document = fakeDom();
+  try {
+    const box = document.createElement("div");
+    renderMwtr(box, wtrBytes());
+    assert.match(text(box), /MWTR 1\.0 · 256×256 tiles · 2 lakes/);
+    renderMveg(box, vegBytes());
+    assert.match(text(box), /MVEG 1\.0 · 1 species · 2 trees · 2 grass clumps in 1 tiles/);
+    assert.match(text(box), /tool=Test/);
+    renderMwfl(box, writeWfl(FALLS));
+    const out = text(box);
+    assert.match(out, /MWFL 1\.1 · stride 132 bytes · 2 falls/);
+    assert.match(out, /Lake 2/);
+    assert.match(out, /Spring/);
+    assert.match(out, /94\.0/); // the lake fall's crest: 1504 sixteenths
+    assert.match(out, /50\.0/); // the spring's crest: 20 ft across the edge, then 30 ft
+    assert.match(out, /freeze, splash, sound/);
+    assert.match(out, /RIVER/);
+    assert.match(out, /\(default\)/);
+    const raw = new Uint8Array(131072);
+    new DataView(raw.buffer).setUint16(2, 1280, true);
+    renderHeightmap(box, raw, heightmapRawLayout("DATA\\T.RAW", raw.length));
+    assert.match(text(box), /max 10\.00 ft/);
+  } finally {
+    globalThis.document = saved;
+  }
 });
 
 test("cp4: 16-bit DATA heightmaps", () => {
@@ -116,14 +242,34 @@ test("cp4: 16-bit DATA heightmaps", () => {
   assert.equal(heightmapRawLayout("data/MYTRACK.RAW", 2097152).side, 1024);
   assert.equal(heightmapRawLayout("ART\\MYTRACK.RAW", 131072), null);
   assert.equal(heightmapRawLayout("DATA\\MYTRACK.RAW", 65536), null);
+  assert.equal(HEIGHTMAP_SCALES.cp4.divisor, 128);
+  assert.equal(HEIGHTMAP_SCALES.cpr.divisor, 16);
+  assert.equal(HEIGHTMAP_SCALES.cpr.label, "CPR (feet = v / 16)");
   const bytes = new Uint8Array(131072);
   new DataView(bytes.buffer).setUint16(2, 1280, true);
-  const { min, max } = readHeightSamples(bytes, 256);
-  assert.equal(min, 0);
-  assert.equal(max, 1280);
+  assert.equal(decodeMtm2Heights(bytes).coarse[1], 1280);
+  assert.equal(decodeMtm2Heights(new Uint8Array(2097152)).fine.length, 1024 * 1024);
   assert.match(getRawDescription("MYTRACK.RAW", 131072, "DATA\\MYTRACK.RAW"), /^Height map \(256×256 u16/);
   assert.match(getRawDescription("MYTRACK.RAW", 2097152, "DATA\\MYTRACK.RAW"), /1024×1024/);
   assert.match(getRawDescription("MYTRACK.RAW", 131072, "ART\\MYTRACK.RAW"), /^RAW image data/);
+});
+
+test("cp4: beta 0.53 sandbox pod: WFL, WTR and VEG", { skip: !existsSync(SANDBOX_053) && `no ${SANDBOX_053}` }, () => {
+  const pod = new Uint8Array(readFileSync(SANDBOX_053));
+  const archive = parsePod(pod);
+  const entry = (name) => readPodEntry(pod, findPodEntry(archive, `WORLD\\${name}`));
+  const wfl = parseWfl(entry("FOGTEST.WFL"));
+  assert.deepEqual([wfl.major, wfl.minor, wfl.stride, wfl.falls.length], [1, 1, 132, 2]);
+  assert.deepEqual(wfl.falls.map((f) => f.source), [2, 0]);
+  assert.deepEqual(wfl.falls.map((f) => f.heightFt), [324, 375.5]);
+  assert.equal(wfl.falls[0].mistHeight, 30);
+  const wtr = parseWtr(entry("FOGTEST.WTR"));
+  assert.equal(wtr.lakes.length, 2);
+  assert.equal(wtr.lakes[wfl.falls[0].source - 1].heightFt, wfl.falls[0].heightFt);
+  const veg = parseMtm2Veg(entry("FOGTEST.VEG"));
+  assert.equal(veg.species.length, 4);
+  assert.equal(veg.trees.count, 12394);
+  assert.equal(veg.info.toolVersion, "1.7.1");
 });
 
 test("cp4: type labels and PNG mask suffixes", () => {
@@ -132,6 +278,7 @@ test("cp4: type labels and PNG mask suffixes", () => {
   assert.equal(getFileTypeInfo("_DEFAULT_CP.CPT").description, "3D cockpit layout (CP4)");
   assert.equal(getFileTypeInfo("TRUCK.SRF").description, "Surface mesh materials (CP4)");
   assert.equal(getFileTypeInfo("LAKES.WTR").description, "Lakes / water bodies (CP4)");
+  assert.equal(getFileTypeInfo("WORLD\\FOGTEST.WFL").description, "Waterfalls (CP4 beta 0.53)");
   assert.match(getFileTypeInfo("BEST.GST").description, /MTM2GHOST 1/);
   assert.equal(getRawDescription("TRACK_V.PNG", 100), "PNG image (vegetation mask, trees)");
   assert.equal(getRawDescription("TRACK_G.PNG", 100), "PNG image (vegetation mask, grass)");

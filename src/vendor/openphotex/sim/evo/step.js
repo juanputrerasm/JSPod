@@ -20,6 +20,7 @@ import { helicopterStep, updateStuck } from "../mtm2/truck/recovery.js";
 import { createTruckState } from "../mtm2/truck/state.js";
 import { evoCentreSplit, evoDifferential, evoDriveInertia, evoGearRatio, evoStepSlip, evoTorqueAt, stepEvoGearbox, } from "./driveline.js";
 import { evoSurfaceMu, evoTreadFactor } from "./rules.js";
+import { trickDamping, trickPitchMoment } from "../mtm2/truck/trick.js";
 /** A vehicle at `pos` facing `heading`, in `gear`, with its Evo state. */
 export function createEvoTruckState(pos, heading, gear, p) {
     const s = createTruckState(pos, heading, gear, p);
@@ -275,7 +276,11 @@ export function stepEvoTruck(s, p, ctx, dt) {
     const L = p.hubs[0][2] * 2;
     const [pRoll, qPitch, rYaw] = s.rates;
     const A = spec.refArea;
-    const moment = [spec.cmq * qPitch * A[1] * L * qbar, spec.cnr * rYaw * A[0] * L * qbar, spec.clp * pRoll * A[0] * L * qbar];
+    // Evo 2 forces clp and cmq to -0.05 (`rollPitchDamping`); Evo 1 keeps the .TRK's.
+    const cmq = rules.rollPitchDamping ?? spec.cmq, clp = rules.rollPitchDamping ?? spec.clp;
+    // The host's trick handling (mtm2/truck/trick.ts), on the session's rules; none set is Evo's.
+    const [rotDamp, yawDamp] = trickDamping(ctx.ground.rules, airborne);
+    const moment = [cmq * qPitch * A[1] * L * qbar * rotDamp, spec.cnr * rYaw * A[0] * L * qbar * yawDamp, clp * pRoll * A[0] * L * qbar * rotDamp];
     // Hull contacts (§7) with Evo's friction.
     const contacts = solveHullContacts(s, p.inertia, ctx.ground, force, mass, W, dt, { factor: rules.hullFrictionFactor, mu: evoSurfaceMu });
     // Sums and integration (§9), as MTM2's.
@@ -306,6 +311,7 @@ export function stepEvoTruck(s, p, ctx, dt) {
     }
     moment[0] += s.impulseMoment / dt;
     s.impulseMoment = 0;
+    moment[0] += trickPitchMoment(ctx.ground.rules, airborne, c.throttle, c.brakeFront, c.brakeRear, p.inertia[1]);
     const [I1, I2, I3] = p.inertia;
     const clamp13 = (v) => (v > 13 ? 13 : v < -13 ? -13 : v);
     const qDot = clamp13(((I3 - I1) / I2) * rYaw * pRoll + moment[0] / I2);

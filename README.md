@@ -16,6 +16,11 @@ JSPod creates, edits and saves POD1 and POD2 archives, and opens EPD and ZIP arc
 
 ---
 
+## What's new in 2.1.1
+
+- Community Patch 4 beta 0.53 waterfalls (.WFL): a table of the falls and a top-down map of their crest lines.
+- The .WTR, .VEG and .WFL readers are now OpenPhotex's (vendored 1.7.3), not JSPod's own.
+
 ## What's new in 2.1
 
 - OGG Vorbis and MP3 entries play in the preview.
@@ -79,6 +84,7 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 | `.PNG`, `.TGA`, `.BMP`, `.JPG`, `.JPEG`, `.GIF`, `.WEBP` | Image preview |
 | `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SIX`, `.SIY`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, `.VEG`, `.WAT`, `.CPT`, `.SRF`, and other text formats | Text preview |
 | `.WTR`, `.VEG` with CP4 magic | Community Patch 4 lakes (`MWTR`) and vegetation (`MVEG`): tables plus a top-down tile map |
+| `.WFL` | Community Patch 4 beta 0.53 waterfalls (`MWFL`): header, a table of the falls (source lake or spring, height, crest width, speed, opacity, mist, volume, flags, sound and texture) and the crest lines on the 8192 ft wrapping world square |
 | `.WAV`, `.OGG`, `.MP3` | Audio player (`.OGG` and `.MP3` play where the browser has the decoder) |
 | `.MOD` | ProTracker music, rendered by OpenPhotex and played with seek and time |
 | `.OPA` | Opacity plane, as greyscale |
@@ -95,12 +101,15 @@ over. Art files name the map they are: a `_N`, `_AO`, `_DTL` or `_MASK` suffix o
 `.RAW`, `.PNG` or `.TGA` stem is reported as a normal map, ambient occlusion,
 terrain detail normal or terrain detail mask.
 
-Community Patch 4 (MTM2 beta 0.52) files are described too. `.OGG` and `.MP3` are its
+Community Patch 4 (MTM2 beta 0.52 and 0.53) files are described too. `.OGG` and `.MP3` are its
 music, `.CPT` the 3D cockpit layout and `.SRF` a model's surface material sidecar, both
 text. A `.VEG` starting with `MVEG` is CP4's binary vegetation (species, trees, grass and
 its RULE/INFO text), any other `.VEG` is 4x4 Evolution's text; `.WTR` (`MWTR`) holds the
-lakes and the tile map of which body covers each terrain tile. `.GST` Time Attack ghosts
-are shown as hex. On a `.PNG`, `_V` and `_G` name the tree and grass vegetation masks and
+lakes and the tile map of which lake covers each terrain tile. Beta 0.53 adds `.WFL`
+(`MWFL`) waterfalls: up to 64 crest lines of 2 to 8 points, each fed by a lake from the
+`.WTR` or by a spring at its own height, with flow speed, opacity, mist, sound and texture.
+These three binary files are read with OpenPhotex (`parseWtr`, `parseMtm2Veg`, `parseWfl`).
+`.GST` Time Attack ghosts are shown as hex. On a `.PNG`, `_V` and `_G` name the tree and grass vegetation masks and
 `_H` the 16-bit grey height map. A `DATA\<track>.RAW` of 131,072 bytes (u16 256x256) or
 2,097,152 bytes (u16 1024x1024 at an 8 ft grid) is a CP4 heightmap in 1/128 ft; CART
 Precision Racing also ships 131,072-byte u16 RAWs in 1/16 ft, so that size offers both
@@ -208,7 +217,7 @@ Relative archive paths are resolved against the viewer page. When both parameter
 | OPFS | Working storage: the open archive, added and edited data, and saved output |
 | Three.js r169 | BIN/LWO, SMF, CMD, DFM, and KFM rendering and camera controls |
 | fflate 0.8.2 | ZIP import and export |
-| [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) 1.4 | POD1/POD2/EPD reading, POD1/POD2 writing with CRCs and audit records, texture decoding and encoding, models and MOD rendering, vendored as plain ES modules in `src/vendor/openphotex/` |
+| [OpenPhotex](https://github.com/juanputrerasm/OpenPhotex) 1.7.3 | POD1/POD2/EPD reading, POD1/POD2 writing with CRCs and audit records, texture decoding and encoding, models and MOD rendering, the Community Patch 4 .WTR, .VEG, .WFL and height readers, vendored as plain ES modules in `src/vendor/openphotex/` |
 
 Archive parsing and palette decoding come from OpenPhotex, the shared Terminal Reality format library also used by JSTrackViewer, JSTruckViewer and JSMTM2Converter. The vendored copy is generated, never edited here: change OpenPhotex, then refresh it from the OpenPhotex checkout with `npm run build && npm run vendor -- ../JSPod/src/vendor/openphotex`.
 

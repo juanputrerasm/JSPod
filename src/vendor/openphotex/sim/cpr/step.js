@@ -19,11 +19,13 @@ import { eulerToMatrix, wrapPi } from "../mtm2/math.js";
 import { surfaceType } from "../mtm2/world/surface.js";
 import { holdRule, integrateOrientation, probeContacts, tireFrame, tireGeometry } from "../mtm2/truck/dynamics.js";
 import { solveHullContacts } from "../mtm2/truck/contacts.js";
+import { holdAfterShift } from "../mtm2/truck/drivetrain.js";
 import { helicopterStep, updateStuck } from "../mtm2/truck/recovery.js";
 import { createTruckState } from "../mtm2/truck/state.js";
 import { DAMPER_FACTOR } from "../mtm2/constants.js";
 import { cloneCprSetup } from "../../cpr/garage.js";
 import { CPR_AIR_DENSITY, CPR_CAR, cprCompoundGrip, cprDamperForce, cprEngineTorque, cprForceFactor, cprMu, cprSurfaceGrip, } from "./rules.js";
+import { trickDamping, trickPitchMoment } from "../mtm2/truck/trick.js";
 const RPM_PER_RAD_S = 9.5493;
 /** Slip angle and slip ratio at the force curve's peak (2.75): the port's stiffnesses. */
 const PEAK_ANGLE = 0.105, PEAK_RATIO = 0.12, CURVE_PEAK = 2.75;
@@ -116,8 +118,11 @@ const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 function stepGearbox(s, p) {
     const c = s.controls;
     const top = GEAR.FIRST + p.cpr.gears.length - 1;
-    if (p.autoShift) {
-        if (c.gear >= GEAR.FIRST && c.gear < top && s.rpm >= CPR_CAR.upshiftRpm)
+    // A request in automatic (`autoOverride`, the port's): taken as the manual box would, then held to the limiter.
+    const taken = p.autoShift && !!c.autoOverride && c.shiftRequest !== 0;
+    const gearBefore = c.gear;
+    if (p.autoShift && !taken) {
+        if (c.gear >= GEAR.FIRST && c.gear < top && s.rpm >= (c.shiftHold ? Math.max(CPR_CAR.upshiftRpm, CPR_CAR.revLimit - 250) : CPR_CAR.upshiftRpm))
             c.gear++;
         else if (c.gear > GEAR.FIRST && s.rpm < DOWNSHIFT_RPM) {
             // Down only where the lower gear stays under the limit.
@@ -132,6 +137,7 @@ function stepGearbox(s, p) {
         if (c.shiftRequest < 0 && c.gear > GEAR.PARK)
             c.gear--;
     }
+    holdAfterShift(c, taken, p.autoShift && !taken, gearBefore);
     c.shiftRequest = 0;
     if (c.gear === GEAR.PARK) {
         c.brakeFront = 1;
@@ -323,9 +329,12 @@ export function stepCprTruck(s, p, ctx, dt) {
     }
     // Aerodynamic damping (7, 0x4707e0): the player's factors on the rates (which rate is which axis is a hypothesis there).
     const qbar = Math.max(26.74, speed * speed * 0.0011885);
-    moment[0] += -0.05 * s.rates[1] * qbar * 10;
-    moment[1] += -0.05 * s.rates[2] * qbar * 10;
-    moment[2] += -0.0025 * s.rates[0] * qbar * 10;
+    // The host's trick handling (mtm2/truck/trick.ts), on the session's rules; none set is CART's.
+    const aloft = s.tires.every((t) => !t.onGround);
+    const [rotDamp, yawDamp] = trickDamping(ctx.ground.rules, aloft);
+    moment[0] += -0.05 * s.rates[1] * qbar * 10 * rotDamp;
+    moment[1] += -0.05 * s.rates[2] * qbar * 10 * yawDamp;
+    moment[2] += -0.0025 * s.rates[0] * qbar * 10 * rotDamp;
     const contacts = solveHullContacts(s, p.inertia, ctx.ground, force, mass, W, dt);
     for (let k = 0; k < 3; k++)
         force[k] += contacts.force[k] + tireSum[k] + s.extForce[k];
@@ -350,6 +359,7 @@ export function stepCprTruck(s, p, ctx, dt) {
     }
     moment[0] += s.impulseMoment / dt;
     s.impulseMoment = 0;
+    moment[0] += trickPitchMoment(ctx.ground.rules, aloft, c.throttle, c.brakeFront, c.brakeRear, p.inertia[1]);
     // Euler's equations, each angular acceleration held to 13 rad/s² (10, 0x4654c0), and explicit Euler (8).
     const [I1, I2, I3] = p.inertia;
     const [pRoll, qPitch, rYaw] = s.rates;

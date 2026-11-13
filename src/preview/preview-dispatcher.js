@@ -9,8 +9,9 @@ import { render as renderHex }   from "./hex-preview.js";
 import { render as renderTiff }  from "./tiff-preview.js";
 import { render as renderMod }   from "./mod-preview.js";
 import { render as renderOpa }   from "./opa-preview.js";
-import { renderMwtr, renderMveg, renderHeightmap } from "./cp4-world-preview.js";
-import { cp4WorldMagic, heightmapRawLayout } from "../model/cp4-world.js";
+import { renderMwtr, renderMveg, renderMwfl, renderHeightmap } from "./cp4-world-preview.js";
+import { heightmapRawLayout } from "../model/cp4-world.js";
+import { isWtr, isMtm2Veg, isWfl } from "../vendor/openphotex/index.js";
 
 const TEXT_EXTENSIONS = new Set([
   "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX",
@@ -87,15 +88,20 @@ export async function dispatch(container, bytes, context) {
       renderWav(container, bytes, AUDIO_MIME[ext]);
       return;
     }
-    // CP4 writes binary .VEG ("MVEG") and .WTR ("MWTR"). 4x4 Evolution's .VEG is text with
-    // no magic, so anything else in a .VEG falls through to the text preview.
-    const magic = (ext === "VEG" || ext === "WTR") ? cp4WorldMagic(bytes) : null;
-    if (magic === "MWTR") {
+    // CP4 writes binary .VEG ("MVEG") and .WTR ("MWTR"), and beta 0.53 adds .WFL ("MWFL").
+    // 4x4 Evolution's .VEG is text with no magic, so anything else in a .VEG falls through to
+    // the text preview.
+    const cp4World = ext === "VEG" || ext === "WTR" || ext === "WFL";
+    if (cp4World && isWtr(bytes)) {
       renderMwtr(container, bytes);
       return;
     }
-    if (magic === "MVEG") {
+    if (cp4World && isMtm2Veg(bytes)) {
       renderMveg(container, bytes);
+      return;
+    }
+    if (cp4World && isWfl(bytes)) {
+      renderMwfl(container, bytes);
       return;
     }
     if (TEXT_EXTENSIONS.has(ext)) {

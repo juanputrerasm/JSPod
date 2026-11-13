@@ -1112,7 +1112,7 @@ export class PodApp {
   }
 
   showAbout() {
-    return alertDialog("About JSPod", "JSPod 2.1.0\n\nA web POD archive editor for Terminal Reality games by Kmaster.\n\nFile formats are read and written by OpenPhotex library.\n\n License: Apache-2.0.");
+    return alertDialog("About JSPod", "JSPod 2.1.1\n\nA web POD archive editor for Terminal Reality games by Kmaster.\n\nFile formats are read and written by OpenPhotex library.\n\n License: Apache-2.0.");
   }
 
   async autoloadFromPageQuery() {

@@ -1,6 +1,6 @@
 {
   "name": "jspod",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "Browser POD archive authoring tool for Terminal Reality games. No build step; this file only runs the unit tests.",
   "license": "Apache-2.0",

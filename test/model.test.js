@@ -86,5 +86,7 @@ test("disable names", () => {
   assert.equal(disabledName("A.TrK"), "A.TRX");
   assert.equal(disabledName("a.trk"), "a.trx");
   assert.equal(enabledName("A.SIY"), "A.SI2");
+  assert.equal(disabledName("WORLD\\CHI1.SI3"), "WORLD\\CHI1.SIZ");
+  assert.equal(enabledName("world\\chi1.siz"), "world\\chi1.si3");
   assert.equal(disabledName("A.RAW"), null);
 });

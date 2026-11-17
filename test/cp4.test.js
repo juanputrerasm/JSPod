@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { heightmapRawLayout, HEIGHTMAP_SCALES } from "../src/model/cp4-world.js";
 import { getFileTypeInfo, getRawDescription, getHdMapRole } from "../src/file-type-info.js";
 import {
-  isWtr, isMtm2Veg, isWfl, parseWtr, parseMtm2Veg, vegTreeAt, parseWfl, writeWfl, decodeMtm2Heights,
+  writeWtr, isWtr, isMtm2Veg, isWfl, parseWtr, parseMtm2Veg, vegTreeAt, parseWfl, writeWfl, decodeMtm2Heights,
   parsePod, findPodEntry, readPodEntry,
 } from "../src/vendor/openphotex/index.js";
 import { renderMwtr, renderMveg, renderMwfl, renderHeightmap } from "../src/preview/cp4-world-preview.js";
@@ -183,7 +183,7 @@ test("cp4: MWFL v1.0 when every mist size is the default, and refusals", () => {
   bad[32 + 16 + 8 + 2] = 1; // first fall's point count
   assert.throws(() => parseWfl(bad), /points/);
   const major = writeWfl(plain);
-  major[4] = 2;
+  major[4] = 3;
   assert.throws(() => parseWfl(major), /major/);
 });
 
@@ -228,6 +228,15 @@ test("cp4: previews render WTR, VEG, WFL and a heightmap through the vendor", ()
     assert.match(out, /freeze, splash, sound/);
     assert.match(out, /RIVER/);
     assert.match(out, /\(default\)/);
+    // Track format version 6: a .WFL version 2 on a 512-cell world, a crest beyond 8192 ft, and a version 2 .WTR map.
+    renderMwfl(box, writeWfl([{ source: 0, flags: 0, speed: 64, height: 3000, points: [{ x: 12000 * 16, z: 100 * 16 }, { x: 12040 * 16, z: 100 * 16 }], opacity: 100, mist: 0, volume: 0 }], { cells: 512 }));
+    assert.match(text(box), /MWFL 2\.0 · stride 128 bytes · 1 fall · 512×512 cells/);
+    assert.match(text(box), /16384 ft square/);
+    assert.match(text(box), /1500\.0/);
+    const tmap512 = new Uint8Array(512 * 512);
+    tmap512[300 * 512 + 400] = 1;
+    renderMwtr(box, writeWtr([{ flags: 0, height: 3000, seeds: [{ x: 400, z: 300 }], box: { minX: 400, minZ: 300, maxX: 400, maxZ: 300 }, tileCount: 1 }], tmap512));
+    assert.match(text(box), /MWTR 2\.0 · 512×512 tiles · 1 lake/);
     const raw = new Uint8Array(131072);
     new DataView(raw.buffer).setUint16(2, 1280, true);
     renderHeightmap(box, raw, heightmapRawLayout("DATA\\T.RAW", raw.length));

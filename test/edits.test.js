@@ -95,12 +95,12 @@ test("remove a folder removes its subtree and explicit folders", () => {
 });
 
 test("disable and enable keep case and skip other entries", () => {
-  const d = doc(["TRUCK\\BIG.TRK", "track.sit", "X.SI2", "Y.RAW"]);
+  const d = doc(["TRUCK\\BIG.TRK", "track.sit", "X.SI2", "Z.SI3", "Y.RAW"]);
   const h = new History();
   h.run(d, "Disable", (x) => setDisabled(x, x.entries.map((e) => e.id), true));
-  assert.deepEqual(names(d), ["TRUCK\\BIG.TRX", "track.six", "X.SIY", "Y.RAW"]);
+  assert.deepEqual(names(d), ["TRUCK\\BIG.TRX", "track.six", "X.SIY", "Z.SIZ", "Y.RAW"]);
   h.run(d, "Enable", (x) => setDisabled(x, x.entries.map((e) => e.id), false));
-  assert.deepEqual(names(d), ["TRUCK\\BIG.TRK", "track.sit", "X.SI2", "Y.RAW"]);
+  assert.deepEqual(names(d), ["TRUCK\\BIG.TRK", "track.sit", "X.SI2", "Z.SI3", "Y.RAW"]);
 });
 
 test("comment: 79 bytes and windows-1252 only", () => {

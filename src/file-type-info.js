@@ -74,6 +74,8 @@ const FILE_TYPES = {
   SI2:  { description: "Situation, CommPatch 3+ engine", icon: "🗺" },
   SIX:  { description: "Situation, disabled",        icon: "🗺" },
   SIY:  { description: "Situation, CommPatch 3+ engine, disabled", icon: "🗺" },
+  SI3:  { description: "Situation, track format version 6 (taller tracks, larger worlds)", icon: "🗺" },
+  SIZ:  { description: "Situation, track format version 6, disabled", icon: "🗺" },
   TXV:  { description: "Track version manifest",     icon: "📋" },
   LVL:  { description: "Level definition file",                       icon: "🗺" },
   TRK:  { description: "Truck definition file",             icon: "🛻" },

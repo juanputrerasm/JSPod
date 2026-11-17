@@ -17,9 +17,10 @@ const TEXT_EXTENSIONS = new Set([
   "TXT","DEF","LVL","SIT","INI","LST","INF","CFG","TEX","TNL","TTX",
   "TRK","TRN","NDX","MIC","NAV","TDF","VOX","JSIN","TTY","JSON","CRS",
   "DVP","GLT","PIT","LVO","LOC","DMO", "LOG", "CAR", "200", "400", "480", "ANI", "KLP", "SET",
-  // CommPatch tracks, and the disabled forms of tracks and trucks. Disabling only
-  // renames the file, so the payload is the same text it was before.
-  "SI2","SIX","SIY","TRX","TXV",
+  // CommPatch tracks, track format version 6 tracks (.SI3, the same text as a .SI2), and the
+  // disabled forms of tracks and trucks. Disabling only renames the file, so the payload is the
+  // same text it was before.
+  "SI2","SI3","SIX","SIY","SIZ","TRX","TXV",
   // 4x4 Evolution world files, all line-oriented text like the rest of the family.
   "VEG","WAT",
   // Community Patch 4: the 3D cockpit layout and the per-model surface material sidecar.

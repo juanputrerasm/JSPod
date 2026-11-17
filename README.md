@@ -16,6 +16,12 @@ JSPod creates, edits and saves POD1 and POD2 archives, and opens EPD and ZIP arc
 
 ---
 
+## What's new in 2.1.2
+
+- Track format version 6 (https://openmtm2.github.io/proposals/track-format-v6): `.SI3` tracks previewed as text, and disabled for the game as `.SIZ` and back.
+- The `.WTR` lake map, `.VEG` vegetation map and `.WFL` crest map draw a 512-cell world (16,384 ft) when the file holds one.
+- A newer build of OpenPhotex 1.7.3.
+
 ## What's new in 2.1.1
 
 - Community Patch 4 beta 0.53 waterfalls (.WFL): a table of the falls and a top-down map of their crest lines.

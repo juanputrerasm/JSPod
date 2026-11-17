@@ -11,6 +11,7 @@ import { HEIGHTMAP_SCALES } from "../model/cp4-world.js";
 
 const KIND = ["placed tree", "ground / grass"];
 const SPEC_FLAGS = [[1, "cast shadow"], [2, "far shadow"], [4, "crossfade"], [8, "facing"]];
+/** The retail world's side; a track format version 6 file can hold a 512-cell world (16,384 ft). */
 const WORLD_FT = 8192;
 
 let savedHeightScale = "cp4";
@@ -28,7 +29,8 @@ export function renderMwtr(container, bytes) {
 
   const parts = [summary, table];
   if (wtr.tileMap) {
-    const { canvas, ctx, image } = blankCanvas(256, 256);
+    // N x N tiles: 256 in version 1, the world's N in version 2 (track format version 6).
+    const { canvas, ctx, image } = blankCanvas(wtr.tilesX, wtr.tilesZ);
     for (let i = 0; i < wtr.tileMap.length; i++) {
       const id = wtr.tileMap[i];
       const [r, g, bl] = id === 0 ? [24, 24, 28] : bodyColour(id);
@@ -57,9 +59,13 @@ export function renderMveg(container, bytes) {
   ]);
   const table = dataTable(["#", "Name", "Model", "Far model", "Kind", "Collide", "Flags", "Trunk dia (ft)", "Trunk ht (ft)", "Trees"], rows);
 
-  // 8192 ft world on a 256 px map: one pixel per 32 ft tile. Grass tiles are tinted by
-  // clump density, trees drawn over them as dots.
-  const size = 256;
+  // The world on a map of one pixel per 32 ft tile: 8192 ft on 256 px, or 16,384 ft on 512 px when
+  // the file holds a tree or grass tile beyond 8192 ft (a track format version 6 world of 512 cells;
+  // the .VEG header does not say). Grass tiles are tinted by clump density, trees drawn over them as dots.
+  const wide = clumps.tiles.some((t) => t.tx >= 256 || t.tz >= 256)
+    || Array.from({ length: trees.count }, (_, i) => vegTreeAt(trees, i)).some((t) => t.x >= WORLD_FT * 256 || t.z >= WORLD_FT * 256);
+  const size = wide ? 512 : 256;
+  const worldFt = WORLD_FT * (size / 256);
   const { canvas, ctx, image } = blankCanvas(size, size);
   for (let i = 0; i < size * size; i++) image.data.set([24, 24, 28, 255], i * 4);
   const maxClumps = clumps.tiles.reduce((m, t) => Math.max(m, t.count), 0) || 1;
@@ -68,7 +74,7 @@ export function renderMveg(container, bytes) {
     const k = Math.sqrt(t.count / maxClumps);
     image.data.set([30, Math.round(60 + 140 * k), 40, 255], (t.tx + t.tz * size) * 4);
   }
-  const feetPerPixel = WORLD_FT / size;
+  const feetPerPixel = worldFt / size;
   for (let i = 0; i < trees.count; i++) {
     const t = vegTreeAt(trees, i);
     const px = Math.floor(t.x / feetPerPixel);
@@ -78,7 +84,7 @@ export function renderMveg(container, bytes) {
   }
   ctx.putImageData(image, 0, 0);
 
-  const parts = [summary, table, heading("Top-down map, 8192 ft square (x right, z down): green is grass density, yellow dots are trees"), canvas];
+  const parts = [summary, table, heading(`Top-down map, ${worldFt} ft square (x right, z down): green is grass density, yellow dots are trees`), canvas];
   const infoKeys = Object.entries(veg.info);
   if (infoKeys.length) parts.push(heading("INFO"), textBlock(infoKeys.map(([k, v]) => `${k}=${v}`).join("\n")));
   if (veg.rule !== null) parts.push(heading("RULE"), textBlock(veg.rule));
@@ -88,14 +94,16 @@ export function renderMveg(container, bytes) {
 /** Beta 0.53 waterfalls: header, one row a fall, and the crest lines on the wrapping world square. */
 export function renderMwfl(container, bytes) {
   const wfl = parseWfl(bytes);
+  // Version 2 (track format version 6) holds the world's N in its header: 8192 or 16,384 ft.
+  const worldFt = 32 * wfl.cells;
   const n = wfl.falls.length;
   const summary = info(`MWFL ${wfl.major}.${wfl.minor} · stride ${wfl.stride} bytes · ${n} fall${n === 1 ? "" : "s"}`
-    + (wfl.minor >= 1 ? " · records carry the mist size" : ""));
+    + ` · ${wfl.cells}×${wfl.cells} cells` + (wfl.minor >= 1 ? " · records carry the mist size" : ""));
 
   const flagNames = (f) => [f.freeze && "freeze", f.splash && "splash", f.sound && "sound"].filter(Boolean).join(", ") || "-";
   const rows = wfl.falls.map((f, i) => [
     i + 1, f.source === 0 ? "Spring" : `Lake ${f.source}`, f.heightFt.toFixed(1), f.points.length,
-    crestWidthFt(f).toFixed(1), f.speedFtPerSec.toFixed(2), f.opacity, f.mist, f.mistDepth, f.mistHeight, f.volume,
+    crestWidthFt(f, worldFt).toFixed(1), f.speedFtPerSec.toFixed(2), f.opacity, f.mist, f.mistDepth, f.mistHeight, f.volume,
     flagNames(f), f.soundName || "-", f.textureName || "(default)",
   ]);
   const table = dataTable([
@@ -103,25 +111,25 @@ export function renderMwfl(container, bytes) {
     "Mist depth %", "Mist height %", "Volume %", "Flags", "Sound", "Texture",
   ], rows);
 
-  // 512 px for the 8192 ft square (16 ft a pixel): a crest is often under 100 ft wide. Each
-  // segment takes the shortest way across the world edge, and the line is drawn again one world
-  // over on each side so a crest that straddles the edge shows on both.
+  // 512 px for the world square (16 ft a pixel, 32 on a 512-cell world): a crest is often under 100 ft
+  // wide. Each segment takes the shortest way across the world edge, and the line is drawn again one
+  // world over on each side so a crest that straddles the edge shows on both.
   const size = 512;
-  const scale = size / WORLD_FT;
+  const scale = size / worldFt;
   const { canvas, ctx } = blankCanvas(size, size);
   ctx.fillStyle = "rgb(24, 24, 28)";
   ctx.fillRect(0, 0, size, size);
   ctx.strokeStyle = "rgba(255, 255, 255, 0.08)";
   ctx.lineWidth = 1;
-  for (let g = 1024; g < WORLD_FT; g += 1024) {
+  for (let g = 1024; g < worldFt; g += 1024) {
     const p = g * scale + 0.5;
     ctx.beginPath(); ctx.moveTo(p, 0); ctx.lineTo(p, size); ctx.moveTo(0, p); ctx.lineTo(size, p); ctx.stroke();
   }
   wfl.falls.forEach((f, i) => {
-    const pts = unrolledCrest(f);
+    const pts = unrolledCrest(f, worldFt);
     const [r, g, b] = bodyColour(i + 1);
-    for (const dx of [-WORLD_FT, 0, WORLD_FT]) {
-      for (const dz of [-WORLD_FT, 0, WORLD_FT]) {
+    for (const dx of [-worldFt, 0, worldFt]) {
+      for (const dz of [-worldFt, 0, worldFt]) {
         const at = ([x, z]) => [(x + dx) * scale, (z + dz) * scale];
         ctx.strokeStyle = `rgb(${r}, ${g}, ${b})`;
         ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
@@ -139,28 +147,28 @@ export function renderMwfl(container, bytes) {
 
   container.replaceChildren(
     summary, table,
-    heading("Crest lines, 8192 ft square (x right, z down; the dot and number mark point 1; grid every 1024 ft)"), canvas,
+    heading(`Crest lines, ${worldFt} ft square (x right, z down; the dot and number mark point 1; grid every 1024 ft)`), canvas,
   );
 }
 
-/** Crest points in feet, each one the nearest copy (across the 8192 ft wrap) of the one before. */
-function unrolledCrest(fall) {
+/** Crest points in feet, each one the nearest copy (across the world's wrap) of the one before. */
+function unrolledCrest(fall, worldFt) {
   const pts = wflPointsFt(fall);
   for (let k = 1; k < pts.length; k++) {
-    pts[k] = [pts[k - 1][0] + wrapDelta(pts[k][0] - pts[k - 1][0]), pts[k - 1][1] + wrapDelta(pts[k][1] - pts[k - 1][1])];
+    pts[k] = [pts[k - 1][0] + wrapDelta(pts[k][0] - pts[k - 1][0], worldFt), pts[k - 1][1] + wrapDelta(pts[k][1] - pts[k - 1][1], worldFt)];
   }
   return pts;
 }
 
-function crestWidthFt(fall) {
-  const pts = unrolledCrest(fall);
+function crestWidthFt(fall, worldFt) {
+  const pts = unrolledCrest(fall, worldFt);
   let len = 0;
   for (let k = 1; k < pts.length; k++) len += Math.hypot(pts[k][0] - pts[k - 1][0], pts[k][1] - pts[k - 1][1]);
   return len;
 }
 
-function wrapDelta(d) {
-  return d - WORLD_FT * Math.round(d / WORLD_FT);
+function wrapDelta(d, worldFt) {
+  return d - worldFt * Math.round(d / worldFt);
 }
 
 /** Greyscale view of a 16-bit DATA heightmap, with the feet scale chosen from `layout`. */

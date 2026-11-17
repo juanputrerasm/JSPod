@@ -82,9 +82,9 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 | `.ACT` | 256-color palette grid |
 | `.TIF` | 4x4 Evolution 2 palette-indexed TIFF, drawn over a checkerboard when it carries an opacity sample |
 | `.PNG`, `.TGA`, `.BMP`, `.JPG`, `.JPEG`, `.GIF`, `.WEBP` | Image preview |
-| `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SIX`, `.SIY`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, `.VEG`, `.WAT`, `.CPT`, `.SRF`, and other text formats | Text preview |
+| `.TXT`, `.INI`, `.TRK`, `.SIT`, `.SI2`, `.SI3`, `.SIX`, `.SIY`, `.SIZ`, `.TRX`, `.TXV`, `.LVL`, `.DEF`, `.VEG`, `.WAT`, `.CPT`, `.SRF`, and other text formats | Text preview |
 | `.WTR`, `.VEG` with CP4 magic | Community Patch 4 lakes (`MWTR`) and vegetation (`MVEG`): tables plus a top-down tile map |
-| `.WFL` | Community Patch 4 beta 0.53 waterfalls (`MWFL`): header, a table of the falls (source lake or spring, height, crest width, speed, opacity, mist, volume, flags, sound and texture) and the crest lines on the 8192 ft wrapping world square |
+| `.WFL` | Community Patch 4 beta 0.53 waterfalls (`MWFL`): header, a table of the falls (source lake or spring, height, crest width, speed, opacity, mist, volume, flags, sound and texture) and the crest lines on the wrapping world square (8,192 ft, or 16,384 ft for a track format version 6 `.WFL` version 2 on a 512-cell world) |
 | `.WAV`, `.OGG`, `.MP3` | Audio player (`.OGG` and `.MP3` play where the browser has the decoder) |
 | `.MOD` | ProTracker music, rendered by OpenPhotex and played with seek and time |
 | `.OPA` | Opacity plane, as greyscale |
@@ -94,10 +94,12 @@ POD1 has exactly one directory layout: 40-byte entries of `char name[32]`, `int3
 Text entries have an **Edit** button. Image previews (`.RAW`, `.CLR`, `.OPA`, `.TIF`, `.TGA`) have **Save as PNG**; `.RAW` also has **Save as BMP**.
 
 CommPatch tracks and the disabled forms of tracks and trucks are described and
-previewed alongside the originals: `.SI2` is a track only newer engines see, `.TXV`
+previewed alongside the originals: `.SI2` is a track only newer engines see, `.SI3`
+is a track in track format version 6 (taller tracks and larger worlds,
+https://openmtm2.github.io/proposals/track-format-v6), the same text as a `.SI2`, `.TXV`
 is the plain-text record asserting what the pod around it contains, and `.SIX`,
-`.SIY` and `.TRX` are `.SIT`, `.SI2` and `.TRK` renamed to something the game passes
-over. Art files name the map they are: a `_N`, `_AO`, `_DTL` or `_MASK` suffix on a
+`.SIY`, `.SIZ` and `.TRX` are `.SIT`, `.SI2`, `.SI3` and `.TRK` renamed to something the
+game passes over. Art files name the map they are: a `_N`, `_AO`, `_DTL` or `_MASK` suffix on a
 `.RAW`, `.PNG` or `.TGA` stem is reported as a normal map, ambient occlusion,
 terrain detail normal or terrain detail mask.
 
@@ -170,7 +172,7 @@ All edits are made to a working copy; nothing reaches your file until you save.
 | Replace with File | Swaps an entry's data, keeping its name and palette record. |
 | Rename, Move To Folder | A folder carries everything inside it. Dragging rows onto a folder moves them. |
 | Remove | Removes the selection; a folder removes everything inside it. |
-| Disable / Enable in Game | Renames `.TRK`/`.SIT`/`.SI2` to `.TRX`/`.SIX`/`.SIY` and back, so the game passes over a track or truck without it being deleted. |
+| Disable / Enable in Game | Renames `.TRK`/`.SIT`/`.SI2`/`.SI3` to `.TRX`/`.SIX`/`.SIY`/`.SIZ` and back, so the game passes over a track or truck without it being deleted. |
 | Comment | The archive comment, at most 79 bytes. |
 | Save as | POD1 or POD2 for the next save. POD1 names hold 31 bytes; POD2 names hold 255. |
 | Undo, Redo | Every edit above, up to 200 steps, until the next save. |

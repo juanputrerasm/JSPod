@@ -27,7 +27,7 @@ File formats are not implemented in either app's UI code. KPod has its own reade
 | Move To Folder; a folder cannot move into itself | Same | `moveEntries` |
 | Drag rows onto a folder to move them | Same; onto a file means its folder, onto empty space means the root | `src/ui/entry-list.js` |
 | Drop desktop files on the list to add them | Same, folders included | `dropFiles` |
-| Disable / Enable in Game (`.TRK`/`.SIT`/`.SI2` to `.TRX`/`.SIX`/`.SIY`, case kept) | Same | `src/model/disable.js` |
+| Disable / Enable in Game (`.TRK`/`.SIT`/`.SI2` to `.TRX`/`.SIX`/`.SIY`, case kept) | Same, plus `.SI3` to `.SIZ` (track format version 6; JSPod's own letter) | `src/model/disable.js` |
 | Extract Selected / Extract All, keep folder structure | Same | `extract` |
 | Comment, 79 bytes, original bytes kept when unchanged | Same | `commitComment`, `PodDocument.commentForWrite` |
 | POD2 audit trail: record on/off, author, history table; rename/move = remove + add | Same | `src/model/edits.js`, `src/app/tools.js` |
@@ -110,7 +110,7 @@ Have on hand: a classic POD1 with subfolders (an MTM track pack), a large one (H
 - [ ] Renaming to an existing name, or to a POD1 name over 31 bytes, is refused with the reason.
 - [ ] Move To Folder and dragging rows onto a folder move them; moving a folder into itself is refused.
 - [ ] Remove (Delete) removes the selection; a folder removes its subtree.
-- [ ] Disable in Game renames `.TRK`/`.SIT`/`.SI2` to `.TRX`/`.SIX`/`.SIY` keeping case; Enable reverses it.
+- [ ] Disable in Game renames `.TRK`/`.SIT`/`.SI2`/`.SI3` to `.TRX`/`.SIX`/`.SIY`/`.SIZ` keeping case; Enable reverses it.
 - [ ] Editing the comment marks the archive unsaved; 80 bytes or a character like 雪 is refused.
 - [ ] Every edit above undoes and redoes (Ctrl/Cmd+Z, Ctrl+Y or Cmd+Shift+Z), and undoing back to the opened state clears the unsaved marker.
 - [ ] Text entry: Edit, change, Apply; the preview shows the new text, the entry is marked unsaved, and undo restores it. A character outside windows-1252 is refused with its line.
